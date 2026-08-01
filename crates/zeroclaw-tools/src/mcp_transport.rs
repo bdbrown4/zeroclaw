@@ -54,6 +54,14 @@ fn http_sse_read_timeout_secs(
     }
 }
 
+fn stdio_recv_timeout_secs(request: &JsonRpcRequest, tool_timeout_secs: Option<u64>) -> u64 {
+    if request.method == TOOLS_CALL_METHOD {
+        tool_timeout_secs.unwrap_or(RECV_TIMEOUT_SECS)
+    } else {
+        RECV_TIMEOUT_SECS
+    }
+}
+
 fn apply_request_timeout(
     req: reqwest::RequestBuilder,
     timeout_secs: Option<u64>,
@@ -109,6 +117,10 @@ pub struct StdioTransport {
     _child: Child,
     stdin: tokio::process::ChildStdin,
     stdout_lines: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    /// Per-server tool-call timeout, from `McpServerConfig.tool_timeout_secs`.
+    /// Tool calls use this budget for the stdout read deadline (mirroring the
+    /// HTTP transport); init/list keep `RECV_TIMEOUT_SECS`.
+    tool_timeout_secs: Option<u64>,
 }
 
 impl StdioTransport {
@@ -155,6 +167,7 @@ impl StdioTransport {
             _child: child,
             stdin,
             stdout_lines,
+            tool_timeout_secs: config.tool_timeout_secs,
         })
     }
 
@@ -201,7 +214,8 @@ impl McpTransportConn for StdioTransport {
                 error: None,
             });
         }
-        let deadline = std::time::Instant::now() + Duration::from_secs(RECV_TIMEOUT_SECS);
+        let deadline = std::time::Instant::now()
+            + Duration::from_secs(stdio_recv_timeout_secs(request, self.tool_timeout_secs));
         loop {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
