@@ -3050,6 +3050,53 @@ async fn classify_channel_reply_intent(
     Ok(parse_reply_intent(&response))
 }
 
+/// Decide whether the classifier judged a turn answerable without tools.
+///
+/// Deliberately strict: only a bare, unambiguous `EASY` counts. A small local
+/// model will happily editorialise, and every unclear answer must fall back to
+/// the capable model — a false `EASY` costs a wasted round trip (or a wrong
+/// action, if escalation is off), while a false `NEEDS_TOOLS` costs nothing but
+/// a normal cloud turn.
+fn parse_semantic_route_verdict(response: &str) -> bool {
+    let verdict = response
+        .trim()
+        .trim_start_matches(['`', '"', '\'', '*'])
+        .trim();
+    // Take the first line only: reasoning-prone models append explanations.
+    let first = verdict.lines().next().unwrap_or("").trim();
+    let cleaned: String = first
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic() || *c == '_')
+        .collect();
+    cleaned.eq_ignore_ascii_case("easy")
+}
+
+/// Ask a cheap model whether a message can be answered without tools.
+///
+/// Returns `true` only for a clean `EASY`. Any error, timeout, or ambiguity is
+/// the caller's cue to leave the route alone.
+async fn classify_semantic_route(
+    model_provider: &dyn ModelProvider,
+    message: &str,
+    model: &str,
+) -> anyhow::Result<bool> {
+    const SYSTEM: &str = "You are a router. Decide if a chat message can be answered directly, \
+         with no tools and no lookups.\n\
+         Answer EASY only for greetings, thanks, acknowledgements, banter, opinions and small \
+         talk that need nothing but a reply.\n\
+         Answer NEEDS_TOOLS for anything requiring an action or external information: calendars, \
+         email, reminders, searching, reading or posting messages, files, code, server admin, \
+         weather, or any question about what someone said or what is scheduled.\n\
+         When unsure, answer NEEDS_TOOLS.\n\
+         Reply with exactly one word: EASY or NEEDS_TOOLS.";
+    // Media markers would reach the provider as malformed image payloads.
+    let safe = zeroclaw_providers::multimodal::strip_media_markers(message);
+    let response = ProviderDispatch::from_ref(model_provider)
+        .chat_with_system(Some(SYSTEM), &safe, model, Some(0.0))
+        .await?;
+    Ok(parse_semantic_route_verdict(&response))
+}
+
 /// Parse the classifier's raw output into an `AssistantChannelOutcome`. Pure
 /// helper extracted so the LLM-call wrapper has no parsing logic and the
 /// kinded `NO_REPLY[...]` forms can be unit-tested without a model_provider.
@@ -4210,6 +4257,10 @@ async fn process_channel_message_body(
     }
     let runtime_defaults = runtime_defaults_snapshot(ctx.as_ref());
     let mut route = get_route_selection(ctx.as_ref(), &msg, &history_key, &runtime_defaults);
+    // Snapshot the route BEFORE classification can divert it, so a cheap-route
+    // guess that turns out to need tools has somewhere well-defined to escalate
+    // back to (see `route_escalation` below).
+    let default_route = (route.model_provider.clone(), route.model.clone());
 
     // ── Query classification: override route when a rule matches ──
     // NOTE: a configured query-classification rule routes per-message and takes
@@ -4231,6 +4282,85 @@ async fn process_channel_message_body(
             api_key: matched_route.api_key.clone(),
         };
     }
+
+    // ── Semantic fallback: judge what the keywords could not ──────────────
+    // Lexical rules leave most real conversation unclassified, and everything
+    // unclassified defaults to the expensive model. When enabled, ask a cheap
+    // local model whether this turn needs tools at all, and take the cheap route
+    // when it clearly does not. Runs ONLY when no rule matched, so it never
+    // overrides an explicit rule, and every failure path leaves `route` alone.
+    if ctx.query_classification.enabled
+        && ctx.query_classification.semantic_fallback
+        && route.model_provider == default_route.0
+        && route.model == default_route.1
+        && !ctx.query_classification.semantic_hint.is_empty()
+        && !ctx.query_classification.semantic_provider.is_empty()
+        && let Some(semantic_route) = ctx
+            .model_routes
+            .iter()
+            .find(|r| r.hint.eq_ignore_ascii_case(&ctx.query_classification.semantic_hint))
+    {
+        let budget = match ctx.query_classification.semantic_timeout_ms {
+            0 => 2500,
+            ms => ms,
+        };
+        // The classifier is an optimisation, never a dependency: a dead or slow
+        // local model must cost a bounded wait and nothing else.
+        let verdict = match get_or_create_provider(
+            ctx.as_ref(),
+            &ctx.query_classification.semantic_provider,
+            None,
+            &runtime_defaults,
+        )
+        .await
+        {
+            Ok(classifier) => tokio::time::timeout(
+                Duration::from_millis(budget),
+                classify_semantic_route(
+                    classifier.as_ref(),
+                    &msg.content,
+                    &ctx.query_classification.semantic_model,
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| {
+                ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"timeout_ms": budget})), "semantic route classifier timed out — keeping default route");
+                Ok(false)
+            }),
+            Err(err) => Err(err),
+        };
+        match verdict {
+            Ok(true) => {
+                ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"hint": semantic_route.hint.as_str(), "model_provider": semantic_route.model_provider.as_str(), "model": semantic_route.model.as_str()})), "Semantic classifier routed message — overriding route");
+                route = ChannelRouteSelection {
+                    model_provider: semantic_route.model_provider.clone(),
+                    model: semantic_route.model.clone(),
+                    api_key: semantic_route.api_key.clone(),
+                };
+            }
+            Ok(false) => {}
+            Err(err) => {
+                ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"error": format!("{err}")})), "semantic route classifier unavailable — keeping default route");
+            }
+        }
+    }
+
+    // Local-first routing safety net. When classification diverted this turn off
+    // its normal route — typically onto a cheap local model, betting it was idle
+    // chatter — remember where it WOULD have gone. The tool loop escalates back
+    // here the moment the turn asks for a tool, which converts a misroute from a
+    // botched action into a slightly slower correct one. Armed only when the
+    // route actually changed, so unclassified traffic carries no extra state.
+    let mut route_escalation: Option<(String, String, String)> =
+        if route.model_provider != default_route.0 || route.model != default_route.1 {
+            Some((
+                route.model_provider.clone(),
+                default_route.0.clone(),
+                default_route.1.clone(),
+            ))
+        } else {
+            None
+        };
 
     let mut active_model_provider = match get_or_create_provider(
         ctx.as_ref(),
@@ -4837,6 +4967,8 @@ async fn process_channel_message_body(
                 agent_alias: Some(ctx.agent_alias.as_str()),
                 turn_id: &turn_id,
             });
+            let tool_loop = zeroclaw_api::ROUTE_ESCALATION
+                .scope(std::cell::RefCell::new(route_escalation.clone()), tool_loop);
             let tool_loop = zeroclaw_api::NATIVE_THINKING_OVERRIDE
                 .scope(thinking.params.native_thinking, tool_loop);
             let tool_loop = zeroclaw_runtime::agent::tool_receipts::TOOL_LOOP_RECEIPT_CONTEXT
@@ -4865,6 +4997,11 @@ async fn process_channel_message_body(
                         route.model_provider, route.model, new_model_provider, new_model
                     )
                 );
+                // Disarm the escalation for the remainder of this turn. The
+                // origin check in the tool loop already prevents a second fire
+                // (the provider has changed), but clearing it here makes
+                // termination independent of how provider refs compare.
+                route_escalation = None;
 
                 let resolved_model_provider = match resolve_provider_ref_for_runtime_switch(
                     runtime_defaults.config.as_ref(),
@@ -5984,6 +6121,7 @@ fn build_channel_by_id(
                     dc.mention_only,
                 )
                 .with_channel_ids(dc.channel_ids.clone())
+                .with_mention_exempt_channel_ids(dc.mention_exempt_channel_ids.clone())
                 .with_workspace_dir(workspace_dir)
                 .with_streaming(
                     dc.stream_mode,
@@ -7087,6 +7225,7 @@ fn collect_configured_channels(
             dc.mention_only,
         )
         .with_channel_ids(dc.channel_ids.clone())
+        .with_mention_exempt_channel_ids(dc.mention_exempt_channel_ids.clone())
         .with_workspace_dir(config.channel_workspace_dir(&format!("discord.{alias}")))
         .with_streaming(
             dc.stream_mode,
@@ -9761,6 +9900,7 @@ pub async fn deliver_announcement(
                 dc.mention_only,
             )
             .with_channel_ids(dc.channel_ids.clone())
+            .with_mention_exempt_channel_ids(dc.mention_exempt_channel_ids.clone())
             .with_workspace_dir(config.channel_workspace_dir(channel));
             zeroclaw_api::channel::Channel::send(&ch, &make_msg(&safe_output)).await?;
         }
@@ -10699,6 +10839,37 @@ temperature = 0.3
 
         let relative = expand_tilde_in_path("relative/path");
         assert_eq!(relative, PathBuf::from("relative/path"));
+    }
+
+    // Semantic route verdict: only a clean EASY may divert a turn to the cheap
+    // model. Everything else — including a hedged or chatty answer from a small
+    // local model — must leave the capable model in place.
+
+    #[test]
+    fn semantic_verdict_accepts_a_clean_easy() {
+        assert!(parse_semantic_route_verdict("EASY"));
+        assert!(parse_semantic_route_verdict("  easy  "));
+        assert!(parse_semantic_route_verdict("`EASY`"));
+        assert!(parse_semantic_route_verdict("EASY\nbecause it is just a greeting"));
+    }
+
+    #[test]
+    fn semantic_verdict_rejects_needs_tools_and_anything_ambiguous() {
+        assert!(!parse_semantic_route_verdict("NEEDS_TOOLS"));
+        assert!(!parse_semantic_route_verdict("needs_tools"));
+        // Hedged / narrated answers must not be read as EASY.
+        assert!(!parse_semantic_route_verdict("This one looks EASY to me"));
+        assert!(!parse_semantic_route_verdict("EASY or NEEDS_TOOLS"));
+        assert!(!parse_semantic_route_verdict(""));
+        assert!(!parse_semantic_route_verdict("I'm not sure"));
+    }
+
+    #[test]
+    fn semantic_verdict_ignores_leading_reasoning_punctuation() {
+        // A small model that wraps its answer still parses, but only when the
+        // first line really is the single word.
+        assert!(parse_semantic_route_verdict("**EASY**"));
+        assert!(!parse_semantic_route_verdict("Answer: EASY"));
     }
 
     #[test]
@@ -20066,6 +20237,7 @@ This is an example JSON object for profile settings."#;
                 keywords: vec!["analyze-image".into()],
                 ..Default::default()
             }],
+            ..Default::default()
         };
 
         let model_routes = vec![zeroclaw_config::schema::ModelRouteConfig {
@@ -20214,6 +20386,7 @@ This is an example JSON object for profile settings."#;
                 keywords: vec!["analyze-image".into()],
                 ..Default::default()
             }],
+            ..Default::default()
         };
 
         let model_routes = vec![zeroclaw_config::schema::ModelRouteConfig {
@@ -20354,6 +20527,7 @@ This is an example JSON object for profile settings."#;
                 keywords: vec!["analyze-image".into()],
                 ..Default::default()
             }],
+            ..Default::default()
         };
 
         let model_routes = vec![zeroclaw_config::schema::ModelRouteConfig {
@@ -20506,6 +20680,7 @@ This is an example JSON object for profile settings."#;
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let model_routes = vec![

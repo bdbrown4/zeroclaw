@@ -461,6 +461,14 @@ mod tests {
         store
     }
 
+    /// True when `marker` references a path with an `uploads` directory
+    /// component. Marker paths use the host's native separator (`\` on
+    /// Windows), so the segment must be matched separator-agnostically
+    /// rather than by a hardcoded POSIX `/uploads/` substring.
+    fn marker_has_uploads_segment(marker: &str) -> bool {
+        marker.split(['/', '\\']).any(|segment| segment == "uploads")
+    }
+
     #[tokio::test]
     async fn clipboard_image() {
         use base64::{Engine, engine::general_purpose::STANDARD};
@@ -493,7 +501,7 @@ mod tests {
             r.marker
         );
         assert!(
-            r.marker.contains("/uploads/"),
+            marker_has_uploads_segment(&r.marker),
             "clipboard image marker should reference workspace uploads path: {}",
             r.marker
         );
@@ -529,7 +537,7 @@ mod tests {
             r.marker
         );
         assert!(
-            r.marker.contains("/uploads/"),
+            marker_has_uploads_segment(&r.marker),
             "marker should include workspace uploads path: {}",
             r.marker
         );
@@ -666,7 +674,7 @@ mod tests {
             r.marker
         );
         assert!(
-            r.marker.contains("/uploads/"),
+            marker_has_uploads_segment(&r.marker),
             "marker should include workspace path: {}",
             r.marker
         );

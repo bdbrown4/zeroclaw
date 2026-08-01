@@ -789,6 +789,50 @@ pub async fn run_tool_call_loop(p: ToolLoop<'_>) -> Result<String> {
             return Ok(accumulated_display_text);
         }
 
+        // ── Local-first routing: escalate rather than fumble ──────────────
+        // Reaching here means the model asked for at least one tool. If this
+        // turn was diverted onto a cheap/local model on the guess that it was
+        // idle chatter, that guess has just been proven wrong — so bail out and
+        // let the orchestrator re-run the whole turn on the model it would have
+        // used anyway. Crucially this is BEFORE any tool executes (see
+        // `prepare_tool_calls` below) and before a byte reaches the channel, so
+        // the user sees one good answer a little later rather than a botched one.
+        //
+        // The guard tests the ORIGIN provider, not the target: delegated
+        // sub-agent loops run inside this same task and inherit the task-local,
+        // so a target-only test would fire inside the sub-agent's loop where
+        // nothing catches the error. `take()` makes it strictly one-shot, so
+        // termination never depends on how provider refs happen to normalize.
+        if let Some((esc_provider, esc_model)) = zeroclaw_api::ROUTE_ESCALATION
+            .try_with(|slot| {
+                let mut slot = slot.borrow_mut();
+                if slot
+                    .as_ref()
+                    .is_some_and(|(origin, _, _)| origin == provider_name)
+                {
+                    slot.take().map(|(_, target, model)| (target, model))
+                } else {
+                    None
+                }
+            })
+            .ok()
+            .flatten()
+        {
+            ::zeroclaw_log::record!(
+                INFO,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Migrate)
+                    .with_category(::zeroclaw_log::EventCategory::Provider),
+                &format!(
+                    "Cheap route asked for a tool — escalating {provider_name} {model} -> {esc_provider} {esc_model}"
+                )
+            );
+            return Err(ModelSwitchRequested {
+                model_provider: esc_provider,
+                model: esc_model,
+            }
+            .into());
+        }
+
         // Do not accumulate intermediate-turn display text into the final
         // channel response. Native tool-call providers may emit narration or
         // scratchpad-like text alongside tool calls; draft-capable channels

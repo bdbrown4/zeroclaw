@@ -1476,12 +1476,15 @@ fn native_dispatcher_converts_tool_results_to_tool_messages() {
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].role, "tool");
     assert_eq!(messages[1].role, "tool");
-    assert!(messages[0].content.contains("[IMAGE:"));
-    assert!(
-        messages[0]
-            .content
-            .contains(&image_path.display().to_string())
-    );
+    // `to_provider_messages` wraps each tool result in a JSON envelope
+    // (`{"tool_call_id":…,"content":…}`), so the inner text is JSON-escaped:
+    // a Windows `C:\…` path is serialized with doubled backslashes and never
+    // appears verbatim in the envelope. Assert on the *decoded* inner
+    // `content`, which is what the consumer
+    // (`multimodal::normalize_native_tool_result_json`) actually reads.
+    let payload: serde_json::Value = serde_json::from_str(&messages[0].content).unwrap();
+    let inner = payload["content"].as_str().unwrap();
+    assert!(inner.contains(&format!("[IMAGE:{}]", image_path.display())));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

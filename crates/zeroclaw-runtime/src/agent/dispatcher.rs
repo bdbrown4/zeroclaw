@@ -562,7 +562,17 @@ mod tests {
         let messages = dispatcher.to_provider_messages(&[stored]);
         assert_eq!(messages.len(), 1, "one tool result -> one provider message");
         assert_eq!(messages[0].role, "tool");
-        messages[0].content.clone()
+        // The native read side wraps the result in a JSON envelope
+        // (`{"tool_call_id":…,"content":…}`), so the provider-visible text is
+        // the *decoded* `content` field. Matching against the raw envelope
+        // would compare JSON-escaped separators (`C:\\Users\\…` on Windows)
+        // against the unescaped path and fail on any non-POSIX host.
+        let payload: Value = serde_json::from_str(&messages[0].content)
+            .expect("native tool result must be a JSON envelope");
+        payload["content"]
+            .as_str()
+            .expect("native tool result envelope must carry a string `content`")
+            .to_string()
     }
 
     #[test]
@@ -632,8 +642,15 @@ mod tests {
         }])];
         let messages = native.to_provider_messages(&history);
         assert_eq!(messages.len(), 1);
+        // Decode the JSON envelope before matching: the raw string carries
+        // JSON-escaped path separators on Windows (`C:\\Users\\…`).
+        let payload: Value = serde_json::from_str(&messages[0].content)
+            .expect("native tool result must be a JSON envelope");
+        let content = payload["content"]
+            .as_str()
+            .expect("native tool result envelope must carry a string `content`");
         assert!(
-            messages[0].content.contains(&format!("[IMAGE:{path}]")),
+            content.contains(&format!("[IMAGE:{path}]")),
             "unknown-provenance result must still promote a real image path"
         );
     }

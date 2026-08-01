@@ -82,6 +82,10 @@ pub struct DiscordChannel {
     peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
     listen_to_bots: bool,
     mention_only: bool,
+    /// Channels exempt from the `mention_only` gate (config
+    /// `mention_exempt_channel_ids`). Treated exactly like a DM: conversational,
+    /// no @mention required — while other channels stay mention-only.
+    mention_exempt_channel_ids: Vec<String>,
     /// Raw IDENTIFY mask override (config `intents_mask`). `Some` wins over
     /// everything `gateway_intents()` would derive — including `Some(0)`,
     /// a legal IDENTIFY value. Intents are connection-scoped (sent once in
@@ -129,6 +133,14 @@ pub struct DiscordChannel {
     /// Value is `Some(parent_id)` when the channel is a thread, `None`
     /// when it is a regular (non-thread) channel.
     thread_channels: Arc<AsyncMutex<HashMap<String, Option<String>>>>,
+    /// Cached `channel_id -> #name` lookups, populated lazily on first inbound
+    /// message from a channel. Names can be renamed, but the cost of a stale
+    /// name is a slightly wrong label, while the cost of re-fetching per
+    /// message is a request on the listen loop — so it is cached for the
+    /// channel instance's lifetime like the thread lookup beside it.
+    ///
+    /// `None` means the lookup succeeded but the channel had no name (DMs).
+    channel_labels: Arc<AsyncMutex<HashMap<String, Option<String>>>>,
     /// Ephemeral Discord gateway session state for Resume across reconnects.
     gateway_session: Mutex<DiscordGatewaySession>,
     /// When true, register and serve Discord slash commands (e.g. `/ask`)
@@ -181,6 +193,7 @@ impl DiscordChannel {
             peer_resolver,
             listen_to_bots,
             mention_only,
+            mention_exempt_channel_ids: vec![],
             intents_mask_override: None,
             reaction_scope: zeroclaw_config::schema::DiscordReactionScope::Off,
             typing_handles: Mutex::new(HashMap::new()),
@@ -198,6 +211,7 @@ impl DiscordChannel {
             pending_approvals: Arc::new(AsyncMutex::new(HashMap::new())),
             approval_timeout_secs: 300,
             thread_channels: Arc::new(AsyncMutex::new(HashMap::new())),
+            channel_labels: Arc::new(AsyncMutex::new(HashMap::new())),
             gateway_session: Mutex::new(DiscordGatewaySession::default()),
             slash_commands: false,
             slash_command_scope: zeroclaw_config::schema::SlashCommandScope::Global,
@@ -290,6 +304,18 @@ impl DiscordChannel {
         }
         match super::transcription::TranscriptionManager::new(&config) {
             Ok(m) => {
+                // Bind to the sole registered provider when only one is
+                // configured so the channel-side ingest path dispatches
+                // without an agent context (mirrors wati.rs/mattermost.rs).
+                // Multi-provider setups still require explicit
+                // `agent.<alias>.transcription_provider` routing.
+                let names = m.available_providers();
+                let m = if names.len() == 1 {
+                    let only = names[0].to_string();
+                    m.with_agent_transcription_provider(only)
+                } else {
+                    m
+                };
                 self.transcription_manager = Some(std::sync::Arc::new(m));
                 self.transcription = Some(config);
             }
@@ -327,6 +353,11 @@ impl DiscordChannel {
 
     pub fn with_channel_ids(mut self, ids: Vec<String>) -> Self {
         self.channel_ids = ids;
+        self
+    }
+
+    pub fn with_mention_exempt_channel_ids(mut self, ids: Vec<String>) -> Self {
+        self.mention_exempt_channel_ids = ids;
         self
     }
 
@@ -1619,6 +1650,143 @@ fn admit_discord_message(
     Some(normalized)
 }
 
+/// Maximum characters of quoted context inlined per block. Long forwards are
+/// truncated rather than dropped: the opening lines are where the answer
+/// usually is, and an unbounded quote would crowd out the conversation.
+const MAX_QUOTED_CONTEXT_CHARS: usize = 1200;
+
+/// Cap on forwarded snapshots rendered from a single message. Discord sends one
+/// today, but the wire field is an array.
+const MAX_FORWARD_SNAPSHOTS: usize = 3;
+
+/// Cap on embeds summarized per quoted message.
+const MAX_QUOTED_EMBEDS: usize = 3;
+
+/// Truncate on a character boundary (never a byte one — quoted content is
+/// arbitrary user text and may be mid-emoji at any byte offset).
+fn truncate_quoted(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let kept: String = s.chars().take(max).collect();
+    format!("{kept}… [truncated]")
+}
+
+/// Best-effort display name for the author of a replied-to message.
+fn quoted_author_name(m: &serde_json::Value) -> String {
+    m.get("author")
+        .and_then(|a| {
+            a.get("global_name")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty())
+                .or_else(|| a.get("username").and_then(serde_json::Value::as_str))
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or("someone")
+        .to_string()
+}
+
+/// Flatten a quoted message into readable text: its body plus terse notes for
+/// attachments and embeds, so a forward whose payload is a link preview or a
+/// bare image does not render as an empty quote.
+fn quote_message_body(m: &serde_json::Value) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    if let Some(text) = m.get("content").and_then(serde_json::Value::as_str) {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            parts.push(truncate_quoted(trimmed, MAX_QUOTED_CONTEXT_CHARS));
+        }
+    }
+
+    if let Some(atts) = m.get("attachments").and_then(serde_json::Value::as_array) {
+        let names: Vec<&str> = atts
+            .iter()
+            .filter_map(|a| a.get("filename").and_then(serde_json::Value::as_str))
+            .collect();
+        if !names.is_empty() {
+            parts.push(format!("[attachments: {}]", names.join(", ")));
+        }
+    }
+
+    if let Some(embeds) = m.get("embeds").and_then(serde_json::Value::as_array) {
+        for e in embeds.iter().take(MAX_QUOTED_EMBEDS) {
+            let bits: Vec<String> = ["title", "description", "url"]
+                .iter()
+                .filter_map(|k| e.get(*k).and_then(serde_json::Value::as_str))
+                .filter(|s| !s.is_empty())
+                .map(|s| truncate_quoted(s, MAX_QUOTED_CONTEXT_CHARS))
+                .collect();
+            if !bits.is_empty() {
+                parts.push(format!("[embed: {}]", bits.join(" — ")));
+            }
+        }
+    }
+
+    parts.join("\n")
+}
+
+/// Render the context Discord delivers *beside* a message body: the payload of
+/// a forwarded message (`message_snapshots`) and the message being replied to
+/// (`referenced_message`). Discord folds neither into `content`, so without
+/// this the agent receives "add this to my calendar" with no "this" — the
+/// user's own words point at something the model was never shown, and its only
+/// honest move is to ask the user to retype what they just sent.
+///
+/// Deliberately pure and network-free: this runs on the gateway listen loop,
+/// which must never block on a REST lookup, so the forward's source channel is
+/// surfaced as a raw id rather than resolved to a name. Forwarded snapshots
+/// carry no `author` field on the wire, so a forward can name its origin
+/// channel but never its original author.
+///
+/// Returns an empty string when the message carries neither.
+fn describe_inbound_context(d: &serde_json::Value) -> String {
+    let mut blocks: Vec<String> = Vec::new();
+
+    if let Some(re) = d
+        .get("referenced_message")
+        .filter(|v| v.is_object())
+    {
+        let body = quote_message_body(re);
+        if !body.is_empty() {
+            blocks.push(format!(
+                "[Replying to {}]\n{}",
+                quoted_author_name(re),
+                body
+            ));
+        }
+    }
+
+    if let Some(snaps) = d
+        .get("message_snapshots")
+        .and_then(serde_json::Value::as_array)
+    {
+        let origin = d
+            .get("message_reference")
+            .and_then(|r| r.get("channel_id"))
+            .and_then(serde_json::Value::as_str)
+            .map(|c| format!(" from channel {c}"))
+            .unwrap_or_default();
+        for snap in snaps.iter().take(MAX_FORWARD_SNAPSHOTS) {
+            let Some(m) = snap.get("message") else {
+                continue;
+            };
+            let body = quote_message_body(m);
+            if body.is_empty() {
+                continue;
+            }
+            let sent = m
+                .get("timestamp")
+                .and_then(serde_json::Value::as_str)
+                .map(|t| format!(" sent {t}"))
+                .unwrap_or_default();
+            blocks.push(format!("[Forwarded message{origin}{sent}]\n{body}"));
+        }
+    }
+
+    blocks.join("\n\n")
+}
+
 /// Minimal base64 decode (no extra dep) — only needs to decode the user ID portion
 #[allow(clippy::cast_possible_truncation)]
 fn base64_decode(input: &str) -> Option<String> {
@@ -1746,6 +1914,84 @@ async fn discord_thread_parent(
         .await
         .insert(channel_id.to_string(), result.clone());
     result
+}
+
+/// Resolve a channel's `#name`, cached for the channel instance's lifetime.
+///
+/// Mirrors `discord_thread_parent` deliberately: same bounded timeout, and
+/// failures are NOT cached so a transient blip or 429 cannot poison the label
+/// for the rest of the process. Returns `None` on failure or for channels with
+/// no name (DMs), and the caller falls back to the bare id — a message must
+/// never be dropped or delayed because a cosmetic label could not be fetched.
+async fn discord_channel_label(
+    client: &reqwest::Client,
+    bot_token: &str,
+    channel_labels: &Arc<AsyncMutex<HashMap<String, Option<String>>>>,
+    channel_id: &str,
+) -> Option<String> {
+    {
+        let cache = channel_labels.lock().await;
+        if let Some(value) = cache.get(channel_id) {
+            return value.clone();
+        }
+    }
+
+    let url = format!("https://discord.com/api/v10/channels/{channel_id}");
+    let lookup = async {
+        let resp = client
+            .get(&url)
+            .header("Authorization", format!("Bot {bot_token}"))
+            .send()
+            .await
+            .map_err(|e| anyhow::Error::msg(format!("request failed: {e}")))?;
+        if !resp.status().is_success() {
+            anyhow::bail!("non-success status {}", resp.status());
+        }
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| anyhow::Error::msg(format!("body parse failed: {e}")))?;
+        Ok::<Option<String>, anyhow::Error>(
+            body.get("name")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+        )
+    };
+
+    let result = match tokio::time::timeout(THREAD_LOOKUP_TIMEOUT, lookup).await {
+        Ok(Ok(value)) => value,
+        Ok(Err(e)) => {
+            ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"channel_id": channel_id, "error": format!("{}", e)})), "channel label lookup failed");
+            return None;
+        }
+        Err(_) => {
+            ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"channel_id": channel_id, "timeout_secs": THREAD_LOOKUP_TIMEOUT.as_secs()})), "channel label lookup timed out");
+            return None;
+        }
+    };
+
+    channel_labels
+        .lock()
+        .await
+        .insert(channel_id.to_string(), result.clone());
+    result
+}
+
+/// Render the "where am I" line appended to every inbound message. Without it a
+/// bare @mention reaches the agent with no way to tell which conversation it is
+/// in, so it cannot back-read the channel it was just addressed in.
+fn describe_location(is_dm: bool, channel_id: &str, channel_name: Option<&str>) -> String {
+    if is_dm {
+        return "[channel: direct message]".to_string();
+    }
+    if channel_id.is_empty() {
+        return String::new();
+    }
+    match channel_name {
+        Some(name) => format!("[channel: #{name} ({channel_id})]"),
+        None => format!("[channel: {channel_id}]"),
+    }
 }
 
 // Discord gateway intent bits (API v10) — the ones zeroclaw consumes or
@@ -3257,7 +3503,12 @@ impl Channel for DiscordChannel {
                             d.get("content").and_then(|c| c.as_str()).unwrap_or("");
                         let archive_msg_id =
                             d.get("id").and_then(|i| i.as_str()).unwrap_or("");
-                        if !content_raw.is_empty() {
+                        // Archive quoted context too, so a forwarded message is
+                        // searchable by its own words rather than being stored
+                        // as an empty line (or, when it carries no comment,
+                        // skipped entirely by the emptiness guard below).
+                        let archive_context = describe_inbound_context(d);
+                        if !content_raw.is_empty() || !archive_context.is_empty() {
                             let ts = chrono::Utc::now().to_rfc3339();
                             let channel_display =
                                 if is_dm_event { "dm" } else { archive_channel_id };
@@ -3276,6 +3527,10 @@ impl Channel for DiscordChannel {
                             );
                             if !atts.is_empty() {
                                 mem_content.push_str(&format!(" [attachments: {atts}]"));
+                            }
+                            if !archive_context.is_empty() {
+                                mem_content.push('\n');
+                                mem_content.push_str(&archive_context);
                             }
                             let mem_key = if archive_msg_id.is_empty() {
                                 format!("discord_{}", Uuid::new_v4())
@@ -3308,16 +3563,37 @@ impl Channel for DiscordChannel {
                     // inherently private and implicitly addressed to the bot, so bypass
                     // the mention gate — requiring a @mention in a DM is never correct.
                     let is_dm = d.get("guild_id").is_none();
-                    let effective_mention_only = self.mention_only && !is_dm;
+                    // A channel listed in `mention_exempt_channel_ids` is treated
+                    // exactly like a DM: conversational, no @mention required. That
+                    // lets one bot be chatty in a private channel while staying
+                    // mention-only in every public channel.
+                    let msg_channel_id =
+                        d.get("channel_id").and_then(|c| c.as_str()).unwrap_or("");
+                    let is_mention_exempt = !msg_channel_id.is_empty()
+                        && self
+                            .mention_exempt_channel_ids
+                            .iter()
+                            .any(|c| c == msg_channel_id);
+                    let effective_mention_only =
+                        self.mention_only && !is_dm && !is_mention_exempt;
                     let atts = d
                         .get("attachments")
                         .and_then(|a| a.as_array())
                         .cloned()
                         .unwrap_or_default();
                     let has_attachments = !atts.is_empty();
+                    // Forwarded/replied-to payloads, inlined so the agent can
+                    // see what a bare "add this to my calendar" refers to.
+                    let inbound_context = describe_inbound_context(d);
+                    // A forward with no accompanying comment arrives with empty
+                    // `content` and no attachments; without counting it as a
+                    // payload the admit gate would drop it outright and the
+                    // agent would never learn the user sent anything. The
+                    // mention requirement is unchanged — this only widens what
+                    // counts as content, never who may address the bot.
                     let Some(clean_content) = admit_discord_message(
                         content,
-                        has_attachments,
+                        has_attachments || !inbound_context.is_empty(),
                         effective_mention_only,
                         &bot_user_id,
                     ) else {
@@ -3336,6 +3612,17 @@ impl Channel for DiscordChannel {
                         clean_content
                     } else {
                         format!("{clean_content}\n\n[Attachments]\n{attachment_text}")
+                    };
+                    // Appended, never prepended: `parse_approval_reply` below
+                    // reads the leading tokens of this string, so quoted context
+                    // must not displace the body. (Same reason `[Attachments]`
+                    // is appended.)
+                    let final_content = if inbound_context.is_empty() {
+                        final_content
+                    } else if final_content.is_empty() {
+                        inbound_context
+                    } else {
+                        format!("{final_content}\n\n{inbound_context}")
                     };
 
                     // Intercept approval replies before forwarding to the agent.
@@ -3401,6 +3688,36 @@ impl Channel for DiscordChannel {
                         Some(channel_id.clone())
                     } else {
                         None
+                    };
+
+                    // Where am I? Appended last — after `parse_approval_reply`
+                    // has already run — so this label can never sit between an
+                    // approval token and its verb. Same cached, bounded lookup
+                    // as the thread check above: one request per distinct
+                    // channel for the process lifetime, and a failed lookup
+                    // degrades to the bare id rather than blocking the message.
+                    let location = if channel_id.is_empty() {
+                        String::new()
+                    } else {
+                        let name = if is_dm {
+                            None
+                        } else {
+                            discord_channel_label(
+                                &client,
+                                &self.bot_token,
+                                &self.channel_labels,
+                                &channel_id,
+                            )
+                            .await
+                        };
+                        describe_location(is_dm, &channel_id, name.as_deref())
+                    };
+                    let final_content = if location.is_empty() {
+                        final_content
+                    } else if final_content.is_empty() {
+                        location
+                    } else {
+                        format!("{final_content}\n\n{location}")
                     };
 
                     let channel_msg = ChannelMessage {
@@ -6045,6 +6362,164 @@ mod tests {
         // regardless of mention_only setting.
         assert!(admit_discord_message("", false, false, "12345").is_none());
         assert!(admit_discord_message("", false, true, "12345").is_none());
+    }
+
+    // Inbound quoted-context tests. The forward payload below is a verbatim
+    // capture from the Discord REST API (a real forwarded message), so these
+    // assert against the shape actually on the wire rather than a guess:
+    // `content` is empty, the body lives in `message_snapshots[].message`, and
+    // the snapshot carries no `author`.
+
+    fn forwarded_message_fixture() -> serde_json::Value {
+        serde_json::json!({
+            "type": 0,
+            "content": "",
+            "flags": 16384,
+            "attachments": [],
+            "embeds": [],
+            "message_reference": {
+                "type": 1,
+                "channel_id": "400000000000000001",
+                "message_id": "400000000000000002",
+                "guild_id": "400000000000000003"
+            },
+            "message_snapshots": [{
+                "message": {
+                    "type": 0,
+                    "content": "Tentatively scheduled Sunday 8/30 at 3pm ET",
+                    "timestamp": "2026-07-31T17:15:16.808000+00:00",
+                    "attachments": [],
+                    "embeds": []
+                }
+            }]
+        })
+    }
+
+    #[test]
+    fn forwarded_message_body_is_inlined_with_origin_channel() {
+        let ctx = describe_inbound_context(&forwarded_message_fixture());
+        assert!(
+            ctx.contains("Tentatively scheduled Sunday 8/30 at 3pm ET"),
+            "forwarded body must reach the agent, got: {ctx}"
+        );
+        assert!(
+            ctx.contains("400000000000000001"),
+            "forward should name its origin channel, got: {ctx}"
+        );
+    }
+
+    #[test]
+    fn comment_free_forward_is_admitted_rather_than_dropped() {
+        // The regression this whole path exists for: a forward with no comment
+        // has empty content and no attachments, so the pre-patch gate dropped
+        // it silently and the agent never learned anything was sent.
+        let ctx = describe_inbound_context(&forwarded_message_fixture());
+        assert!(!ctx.is_empty());
+        assert!(admit_discord_message("", false, false, "12345").is_none());
+        assert!(
+            admit_discord_message("", !ctx.is_empty(), false, "12345").is_some(),
+            "a forward must count as payload at the admit gate"
+        );
+    }
+
+    #[test]
+    fn forward_does_not_bypass_the_mention_gate() {
+        // Widening what counts as *content* must not widen who may address the
+        // bot: an unmentioned forward in a mention-only channel still drops.
+        let ctx = describe_inbound_context(&forwarded_message_fixture());
+        assert!(admit_discord_message("", !ctx.is_empty(), true, "12345").is_none());
+    }
+
+    #[test]
+    fn reply_context_names_the_author_and_quotes_the_body() {
+        let d = serde_json::json!({
+            "content": "reply to them for me",
+            "referenced_message": {
+                "content": "are we still on for Sunday?",
+                "author": { "username": "luis", "global_name": "Luis" },
+                "attachments": [],
+                "embeds": []
+            }
+        });
+        let ctx = describe_inbound_context(&d);
+        assert!(ctx.contains("Replying to Luis"), "got: {ctx}");
+        assert!(ctx.contains("are we still on for Sunday?"), "got: {ctx}");
+    }
+
+    #[test]
+    fn quoted_media_only_message_is_described_not_blank() {
+        // A forward whose payload is a bare image has empty text; it must still
+        // announce itself rather than render as an empty quote.
+        let d = serde_json::json!({
+            "content": "",
+            "message_snapshots": [{
+                "message": {
+                    "content": "",
+                    "attachments": [{ "filename": "draft-board.png" }],
+                    "embeds": []
+                }
+            }]
+        });
+        let ctx = describe_inbound_context(&d);
+        assert!(ctx.contains("draft-board.png"), "got: {ctx}");
+    }
+
+    #[test]
+    fn location_marker_names_the_channel_when_known() {
+        let loc = describe_location(false, "400000000000000001", Some("football"));
+        assert_eq!(loc, "[channel: #football (400000000000000001)]");
+        // The id must survive even when the name lookup failed, since the id is
+        // the part read_channel actually needs.
+        assert_eq!(
+            describe_location(false, "123", None),
+            "[channel: 123]"
+        );
+    }
+
+    #[test]
+    fn location_marker_handles_dms_and_missing_ids() {
+        assert_eq!(describe_location(true, "555", None), "[channel: direct message]");
+        assert_eq!(describe_location(false, "", Some("x")), "");
+    }
+
+    #[test]
+    fn location_marker_leaves_approval_replies_parsable() {
+        // Appended after the approval intercept, but assert the combined shape
+        // parses anyway — a regression here would silently break confirmations.
+        let combined = format!("abc123 approve\n\n{}", describe_location(false, "42", Some("g")));
+        assert!(crate::util::parse_approval_reply(&combined).is_some());
+    }
+
+    #[test]
+    fn plain_message_gets_no_context_block() {
+        let d = serde_json::json!({ "content": "hello", "attachments": [], "embeds": [] });
+        assert_eq!(describe_inbound_context(&d), "");
+    }
+
+    #[test]
+    fn quoted_context_is_truncated_on_a_char_boundary() {
+        // Multi-byte content must not panic or split mid-character.
+        let long = "é".repeat(MAX_QUOTED_CONTEXT_CHARS + 500);
+        let d = serde_json::json!({
+            "content": "",
+            "message_snapshots": [{ "message": { "content": long, "attachments": [], "embeds": [] } }]
+        });
+        let ctx = describe_inbound_context(&d);
+        assert!(ctx.contains("[truncated]"), "long forward should be truncated");
+        assert!(ctx.chars().count() < MAX_QUOTED_CONTEXT_CHARS + 200);
+    }
+
+    #[test]
+    fn appended_context_leaves_approval_replies_parsable() {
+        // Context is appended, never prepended, so a token+verb approval reply
+        // sent as a Discord reply still parses.
+        let body = "abc123 approve";
+        let ctx = describe_inbound_context(&forwarded_message_fixture());
+        let combined = format!("{body}\n\n{ctx}");
+        assert!(
+            crate::util::parse_approval_reply(&combined).is_some(),
+            "approval reply must survive appended context"
+        );
     }
 
     // mention_only DM-bypass tests

@@ -29,9 +29,9 @@ pub fn is_authoritative(rec: &TaskRecord, current_boot_id: &str) -> bool {
     !pid_is_alive(rec.owner_pid)
 }
 
-/// Best-effort liveness check for `pid`. On Linux we consult `/proc/<pid>`; on other
-/// platforms we conservatively assume the process is alive (never reclaim a
-/// same-boot task we cannot prove is dead).
+/// Best-effort liveness check for `pid`. On Linux we consult `/proc/<pid>`; on Windows
+/// we ask the kernel for a query-only handle. On every other platform we conservatively
+/// assume the process is alive (never reclaim a same-boot task we cannot prove is dead).
 fn pid_is_alive(pid: u32) -> bool {
     if pid == 0 {
         // Unset owner — treat as not-alive so an un-stamped record is reclaimable.
@@ -41,7 +41,31 @@ fn pid_is_alive(pid: u32) -> bool {
     {
         std::path::Path::new(&format!("/proc/{pid}")).exists()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER};
+        use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+        use windows::core::HRESULT;
+        // Parity with the Linux `/proc/<pid>` probe: "does the kernel still know this
+        // pid?". `PROCESS_QUERY_LIMITED_INFORMATION` is the least-privileged access right
+        // that answers it and is grantable across integrity levels.
+        // SAFETY: pure query FFI. The handle never escapes and is closed on success.
+        match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) } {
+            Ok(h) => {
+                // SAFETY: `h` is a valid handle we just opened and never shared.
+                unsafe {
+                    let _ = CloseHandle(h);
+                }
+                true
+            }
+            // ERROR_INVALID_PARAMETER is the kernel saying "no such pid" ⇒ provably dead.
+            // ANY other failure (ACCESS_DENIED on a protected process, resource pressure)
+            // is not proof of death ⇒ stay conservative and report ALIVE, so we never
+            // reap a task whose owner might still be running.
+            Err(e) => e.code() != HRESULT::from_win32(ERROR_INVALID_PARAMETER.0),
+        }
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = pid;
         true // conservative: do not reclaim what we cannot prove dead

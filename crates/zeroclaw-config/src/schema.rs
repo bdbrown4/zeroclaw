@@ -5341,6 +5341,13 @@ fn default_max_system_prompt_chars() -> usize {
     0
 }
 
+/// Default budget for the semantic routing classifier. Generous enough to
+/// absorb a cold local model load, short enough that a hung classifier costs
+/// less than the cloud call it was trying to avoid.
+fn default_semantic_timeout_ms() -> u64 {
+    2500
+}
+
 // ── Pacing ────────────────────────────────────────────────────────
 
 /// Pacing controls for slow/local LLM workloads (`[pacing]` section).
@@ -11098,6 +11105,31 @@ pub struct QueryClassificationConfig {
     /// Classification rules evaluated in priority order.
     #[serde(default)]
     pub rules: Vec<ClassificationRule>,
+    /// Ask a cheap model to judge the turn when NO lexical rule matched, and
+    /// apply `semantic_hint` if it reports the turn needs no tools.
+    ///
+    /// Lexical rules always win; this only ever sees traffic they left
+    /// unclassified, which is the bulk of real conversation. Every failure mode
+    /// — disabled, unconfigured, provider error, timeout, unparseable answer —
+    /// leaves the route untouched, so the default model stays the safe default.
+    /// Default: `false`.
+    #[serde(default)]
+    pub semantic_fallback: bool,
+    /// Hint applied when the semantic classifier judges a turn simple. Must
+    /// match a `[[model_routes]]` entry, or the verdict is discarded.
+    #[serde(default)]
+    pub semantic_hint: String,
+    /// Dotted provider ref for the classifier call (e.g. `ollama.local`).
+    /// Keep this pointed at something cheap and local — it runs per message.
+    #[serde(default)]
+    pub semantic_provider: String,
+    /// Provider-local model id for the classifier call.
+    #[serde(default)]
+    pub semantic_model: String,
+    /// Milliseconds to wait for the classifier before giving up and leaving the
+    /// route untouched. `0` uses the default. Default: `2500`.
+    #[serde(default = "default_semantic_timeout_ms")]
+    pub semantic_timeout_ms: u64,
 }
 
 /// A single classification rule mapping message patterns to a model hint.
@@ -12431,6 +12463,14 @@ pub struct DiscordConfig {
     #[tab(Behavior)]
     #[serde(default)]
     pub mention_only: bool,
+    /// Channel IDs where the `mention_only` gate does NOT apply — the bot replies
+    /// to every message there, exactly as it already does in a DM. Lets one bot be
+    /// conversational in a private channel while staying mention-only everywhere
+    /// else. Empty (default) = `mention_only` applies uniformly. No effect when
+    /// `mention_only = false`.
+    #[tab(Behavior)]
+    #[serde(default)]
+    pub mention_exempt_channel_ids: Vec<String>,
     /// When true, register and serve Discord slash commands (e.g. `/ask`)
     /// over the Gateway WebSocket, in addition to message handling. Default
     /// false. (Prototype: currently registers a single `/ask <prompt>`.)

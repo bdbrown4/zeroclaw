@@ -1477,9 +1477,18 @@ mod tests {
         cron_dir(config).join("jobs.db")
     }
 
+    /// Wait for the log event carrying `message` **for `job_id`**.
+    ///
+    /// The broadcast hook is process-wide and is never scoped per test, so
+    /// every parallel test that deletes a cron job emits the same
+    /// "Removed cron job" message. `HOOK_TEST_LOCK` only stops a peer from
+    /// clearing the hook mid-flight; it does not stop peers from emitting.
+    /// Matching on the message alone therefore returns whichever event landed
+    /// first — often a sibling test's — so the caller must also pin the job id.
     async fn recv_log_event(
         rx: &mut tokio::sync::broadcast::Receiver<serde_json::Value>,
         message: &str,
+        job_id: &str,
     ) -> serde_json::Value {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while std::time::Instant::now() < deadline {
@@ -1490,7 +1499,8 @@ mod tests {
                     if value
                         .get("message")
                         .and_then(|v| v.as_str())
-                        .is_some_and(|candidate| candidate == message) =>
+                        .is_some_and(|candidate| candidate == message)
+                        && value["attributes"]["job_id"] == job_id =>
                 {
                     return value;
                 }
@@ -1499,7 +1509,7 @@ mod tests {
                 Err(_elapsed) => {}
             }
         }
-        panic!("did not find log event: {message}");
+        panic!("did not find log event: {message} (job_id={job_id})");
     }
 
     #[test]
@@ -1896,7 +1906,7 @@ mod tests {
 
         remove_job(&config, &job.id).unwrap();
 
-        let value = recv_log_event(&mut rx, "Removed cron job").await;
+        let value = recv_log_event(&mut rx, "Removed cron job", &job.id).await;
         assert_eq!(value["event"]["category"], "cron");
         assert_eq!(value["event"]["action"], "delete");
         assert_eq!(value["event"]["outcome"], "success");

@@ -49,4 +49,20 @@ tokio::task_local! {
     /// Native extended thinking parameters, set by the outer orchestration
     /// functions and read by `run_tool_call_loop` when building `ChatRequest`.
     pub static NATIVE_THINKING_OVERRIDE: Option<crate::model_provider::NativeThinkingParams>;
+
+    /// Local-first routing escalation target, as
+    /// `(origin_provider, target_provider, target_model)`.
+    ///
+    /// Set by the channel orchestrator when `[query_classification]` diverted a
+    /// turn away from the route it would otherwise have taken — typically onto a
+    /// cheap local model, on the guess that the turn was idle chatter. The tool
+    /// loop consumes it the instant that turn asks for a tool, which is the
+    /// moment the guess is proven wrong, and raises `ModelSwitchRequested` so the
+    /// whole turn re-runs on `target`. Nothing has executed and nothing has
+    /// reached the channel at that point, so the escalation is invisible.
+    ///
+    /// `origin_provider` exists so the consumer can verify it is the turn that
+    /// was actually diverted: delegated sub-agent loops run in this same task and
+    /// inherit this value, so a target-only test would misfire inside them.
+    pub static ROUTE_ESCALATION: std::cell::RefCell<Option<(String, String, String)>>;
 }
