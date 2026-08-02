@@ -4322,14 +4322,35 @@ async fn process_channel_message_body(
     // back to (see `route_escalation` below).
     let default_route = (route.model_provider.clone(), route.model.clone());
 
+    // Does this turn carry an image, now or anywhere in its recent history?
+    //
+    // Cheap local models are usually text-only, and the multimodal pipeline
+    // re-inflates `[IMAGE:<path>]` markers out of history on every turn — so a
+    // screenshot pasted several messages ago still ships with the request. A
+    // text-only model answers that with `400 Multimodal data provided, but
+    // model does not support multimodal`, which cost a real turn ~11s before
+    // the provider fallback rescued it. Observed in production, not theorised.
+    //
+    // Checking the CURRENT message alone is not enough, which is the trap here:
+    // the failing turn contained no image at all, only history that did.
+    let turn_carries_media = !msg.attachments.is_empty()
+        || msg.content.contains("[IMAGE:")
+        || ctx
+            .conversation_histories
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .peek(&history_key)
+            .is_some_and(|turns| turns.iter().any(|t| t.content.contains("[IMAGE:")));
+
     // ── Query classification: override route when a rule matches ──
     // NOTE: a configured query-classification rule routes per-message and takes
     // precedence over BOTH the per-sender route override and the new user/guild/
     // agent scope overrides resolved above — i.e. content-based routing wins over
     // a manual `/model`, exactly as it already did for the per-chat `/model`.
     // (Unconfigured = the default, so the scope ladder is fully honored there.)
-    if let Some(hint) =
-        zeroclaw_runtime::agent::classifier::classify(&ctx.query_classification, &msg.content)
+    if !turn_carries_media
+        && let Some(hint) =
+            zeroclaw_runtime::agent::classifier::classify(&ctx.query_classification, &msg.content)
         && let Some(matched_route) = ctx
             .model_routes
             .iter()
@@ -4349,7 +4370,8 @@ async fn process_channel_message_body(
     // local model whether this turn needs tools at all, and take the cheap route
     // when it clearly does not. Runs ONLY when no rule matched, so it never
     // overrides an explicit rule, and every failure path leaves `route` alone.
-    if ctx.query_classification.enabled
+    if !turn_carries_media
+        && ctx.query_classification.enabled
         && ctx.query_classification.semantic_fallback
         && route.model_provider == default_route.0
         && route.model == default_route.1
