@@ -3081,6 +3081,43 @@ const CHEAP_TURN_SYSTEM_PROMPT: &str = "You are Francis, a Discord assistant, ch
 /// Deliberately biased toward escalating: a false positive costs one extra,
 /// correct turn, while a false negative leaves the user with a wrong answer
 /// from a model that was never equipped to give a right one.
+/// Turn a provider-exhaustion error into something a person can act on.
+///
+/// When every entry in the fallback chain fails, the underlying error is a
+/// multi-line trace of `kind=`/`phase=`/`hint=` attempts — invaluable in a log,
+/// useless in a chat window. On 2026-08-08 Francis pasted four such lines into
+/// Discord as his reply; Ben's only recourse was to say "try again", which
+/// worked, because the outage was transient.
+///
+/// The full trace is still recorded at ERROR by the caller. This only changes
+/// what a human is asked to read.
+fn user_facing_error(e: &anyhow::Error) -> String {
+    let raw = e.to_string();
+    if raw.contains("All model_providers/models failed") {
+        // Name the distinct providers tried, so "is it me or them" is answerable
+        // at a glance without opening the log.
+        let mut tried: Vec<&str> = raw
+            .lines()
+            .filter_map(|l| l.split("model_provider=").nth(1))
+            .filter_map(|l| l.split_whitespace().next())
+            .collect();
+        tried.dedup();
+        let who = if tried.is_empty() {
+            String::new()
+        } else {
+            format!(" (tried {})", tried.join(", "))
+        };
+        return format!(
+            "⚠️ I couldn't reach any model just now{who}. This is usually transient —              ask me again in a moment. The full provider trace is in the log."
+        );
+    }
+    if raw.contains("Request exceeds model context window") {
+        return "⚠️ That turn was too large for the model's context window.                 Try again with less at once, or start a fresh thread."
+            .to_string();
+    }
+    format!("⚠️ Error: {raw}")
+}
+
 fn cheap_answer_is_inadequate(answer: &str) -> bool {
     let trimmed = answer.trim();
     if trimmed.is_empty() {
@@ -5724,12 +5761,12 @@ async fn process_channel_message_body(
                 if let Some(channel) = target_channel.as_ref() {
                     if let Some(ref draft_id) = draft_message_id {
                         let _ = channel
-                            .finalize_draft(&msg.reply_target, draft_id, &format!("⚠️ Error: {e}"))
+                            .finalize_draft(&msg.reply_target, draft_id, &user_facing_error(&e))
                             .await;
                     } else {
                         let _ = channel
                             .send(
-                                &SendMessage::new(format!("⚠️ Error: {e}"), &msg.reply_target)
+                                &SendMessage::new(user_facing_error(&e), &msg.reply_target)
                                     .in_thread(msg.thread_ts.clone()),
                             )
                             .await;
@@ -10317,6 +10354,47 @@ fn expand_tilde_in_path(path: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_facing_error_summarises_provider_exhaustion() {
+        // The real 2026-08-08 failure, shortened. Francis pasted this verbatim
+        // into Discord as his reply.
+        let raw = concat!(
+            "All model_providers/models failed. Attempts:\n",
+            "model_provider=openrouter model=openrouter/auto-beta attempt 1/3: ",
+            "non_retryable; error=OpenRouter API error (404 Not Found); kind=model_not_found\n",
+            "model_provider=gemini model=gemini-2.5-flash attempt 1/3: ",
+            "non_retryable; error=Gemini API error (404 Not Found); kind=model_not_found\n",
+            "model_provider=ollama model=qwen3-francis attempt 1/3: ",
+            "non_retryable; error=Ollama API error (400 Bad Request); kind=model_not_found"
+        );
+        let out = user_facing_error(&anyhow::Error::msg(raw));
+        assert!(out.contains("couldn't reach any model"), "{out}");
+        assert!(out.contains("openrouter"), "should name who was tried: {out}");
+        assert!(out.contains("gemini"), "{out}");
+        assert!(out.contains("ollama"), "{out}");
+        // The point of the change: no wall of diagnostics in the chat window.
+        assert!(!out.contains("kind="), "leaked diagnostics: {out}");
+        assert!(!out.contains("attempt 1/3"), "leaked attempt trace: {out}");
+        assert_eq!(out.lines().count(), 1, "should be one line: {out}");
+    }
+
+    #[test]
+    fn user_facing_error_summarises_context_overflow() {
+        let out = user_facing_error(&anyhow::Error::msg(
+            "Request exceeds model context window. Attempts:\nmodel_provider=x model=y",
+        ));
+        assert!(out.contains("too large"), "{out}");
+        assert!(!out.contains("model_provider="), "{out}");
+    }
+
+    #[test]
+    fn user_facing_error_passes_through_ordinary_errors() {
+        // Anything that is not a provider-chain failure must survive untouched:
+        // this helper is a summariser, not a filter.
+        let out = user_facing_error(&anyhow::Error::msg("tool 'reaction' failed: 403"));
+        assert!(out.ends_with("Error: tool 'reaction' failed: 403"), "{out}");
+    }
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -20337,9 +20415,17 @@ This is an example JSON object for profile settings."#;
 
         let sent = channel_impl.sent_messages.lock().await;
         assert_eq!(sent.len(), 2, "expected one error and one successful reply");
+        // The raw provider trace is no longer what a person is shown; it goes to
+        // the log and the user gets one actionable line. Assert the summary, and
+        // assert the diagnostics did NOT leak into the chat window.
         assert!(
-            sent[0].contains("Format Error"),
-            "first reply must mention the request format error, got: {}",
+            sent[0].contains("couldn't reach any model"),
+            "first reply must be the human summary, got: {}",
+            sent[0]
+        );
+        assert!(
+            !sent[0].contains("attempt 1/3") && !sent[0].contains("kind="),
+            "provider diagnostics must not reach the user, got: {}",
             sent[0]
         );
         assert!(

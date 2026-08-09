@@ -28,6 +28,13 @@ impl ModelProvider for ModelPinnedProvider {
         self.inner.capabilities()
     }
 
+    /// The pin, not the request. This wrapper exists precisely to override the
+    /// caller, so the requested id is never what goes on the wire — and a
+    /// failure report quoting the request describes a call that never happened.
+    fn effective_model(&self, _requested: &str) -> String {
+        self.pinned_model.clone()
+    }
+
     fn default_temperature(&self) -> f64 {
         self.inner.default_temperature()
     }

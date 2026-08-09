@@ -786,6 +786,11 @@ impl ModelProvider for ReliableModelProvider {
                 let mut backoff_ms = self.base_backoff_ms;
                 let mut last_error_detail: Option<String> = None;
                 let mut last_diagnostic: Option<ProviderErrorDiagnostic> = None;
+                // What this provider will actually send. A pinned alias
+                // substitutes its own model, so reporting `current_model` here
+                // names a (provider, model) pair that was never requested.
+                let reported_model = model_provider.effective_model(current_model);
+                let reported_model = reported_model.as_str();
 
                 for attempt in 0..=self.max_retries {
                     match ProviderDispatch::from_ref(&**model_provider)
@@ -799,7 +804,7 @@ impl ModelProvider for ReliableModelProvider {
                                 self.backoff_after_empty_completion(
                                     &mut failures,
                                     provider_name,
-                                    current_model,
+                                    reported_model,
                                     attempt,
                                     &mut backoff_ms,
                                 )
@@ -821,7 +826,7 @@ impl ModelProvider for ReliableModelProvider {
                                     primary,
                                     model,
                                     provider_name,
-                                    current_model,
+                                    reported_model,
                                 );
                             }
                             return Ok(resp);
@@ -834,7 +839,7 @@ impl ModelProvider for ReliableModelProvider {
                                 push_failure(
                                     &mut failures,
                                     provider_name,
-                                    current_model,
+                                    reported_model,
                                     attempt + 1,
                                     self.max_retries + 1,
                                     "non_retryable",
@@ -859,7 +864,7 @@ impl ModelProvider for ReliableModelProvider {
                             push_failure(
                                 &mut failures,
                                 provider_name,
-                                current_model,
+                                reported_model,
                                 attempt + 1,
                                 self.max_retries + 1,
                                 failure_reason,
@@ -889,7 +894,7 @@ impl ModelProvider for ReliableModelProvider {
                                     .with_attrs(
                                         provider_failure_attrs(
                                             provider_name,
-                                            current_model,
+                                            reported_model,
                                             &error_detail,
                                             &diagnostic,
                                         )
@@ -911,7 +916,7 @@ impl ModelProvider for ReliableModelProvider {
                                     .with_attrs(
                                         provider_retry_attrs(
                                             provider_name,
-                                            current_model,
+                                            reported_model,
                                             attempt + 1,
                                             wait,
                                             failure_reason,
@@ -934,7 +939,7 @@ impl ModelProvider for ReliableModelProvider {
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(provider_exhausted_attrs(
                             provider_name,
-                            current_model,
+                            reported_model,
                             last_error_detail.as_deref(),
                             last_diagnostic.as_ref(),
                         )),
@@ -969,6 +974,11 @@ impl ModelProvider for ReliableModelProvider {
                 let mut backoff_ms = self.base_backoff_ms;
                 let mut last_error_detail: Option<String> = None;
                 let mut last_diagnostic: Option<ProviderErrorDiagnostic> = None;
+                // What this provider will actually send. A pinned alias
+                // substitutes its own model, so reporting `current_model` here
+                // names a (provider, model) pair that was never requested.
+                let reported_model = model_provider.effective_model(current_model);
+                let reported_model = reported_model.as_str();
 
                 for attempt in 0..=self.max_retries {
                     match ProviderDispatch::from_ref(&**model_provider)
@@ -982,7 +992,7 @@ impl ModelProvider for ReliableModelProvider {
                                 self.backoff_after_empty_completion(
                                     &mut failures,
                                     provider_name,
-                                    current_model,
+                                    reported_model,
                                     attempt,
                                     &mut backoff_ms,
                                 )
@@ -1005,7 +1015,7 @@ impl ModelProvider for ReliableModelProvider {
                                     primary,
                                     model,
                                     provider_name,
-                                    current_model,
+                                    reported_model,
                                 );
                             }
                             return Ok(resp);
@@ -1026,7 +1036,7 @@ impl ModelProvider for ReliableModelProvider {
                                 push_failure(
                                     &mut failures,
                                     provider_name,
-                                    current_model,
+                                    reported_model,
                                     attempt + 1,
                                     self.max_retries + 1,
                                     "non_retryable",
@@ -1053,7 +1063,7 @@ impl ModelProvider for ReliableModelProvider {
                             push_failure(
                                 &mut failures,
                                 provider_name,
-                                current_model,
+                                reported_model,
                                 attempt + 1,
                                 self.max_retries + 1,
                                 failure_reason,
@@ -1081,7 +1091,7 @@ impl ModelProvider for ReliableModelProvider {
                                     .with_attrs(
                                         provider_failure_attrs(
                                             provider_name,
-                                            current_model,
+                                            reported_model,
                                             &error_detail,
                                             &diagnostic,
                                         )
@@ -1103,7 +1113,7 @@ impl ModelProvider for ReliableModelProvider {
                                     .with_attrs(
                                         provider_retry_attrs(
                                             provider_name,
-                                            current_model,
+                                            reported_model,
                                             attempt + 1,
                                             wait,
                                             failure_reason,
@@ -1126,7 +1136,7 @@ impl ModelProvider for ReliableModelProvider {
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(provider_exhausted_attrs(
                             provider_name,
-                            current_model,
+                            reported_model,
                             last_error_detail.as_deref(),
                             last_diagnostic.as_ref(),
                         )),
@@ -1172,6 +1182,11 @@ impl ModelProvider for ReliableModelProvider {
                 let mut backoff_ms = self.base_backoff_ms;
                 let mut last_error_detail: Option<String> = None;
                 let mut last_diagnostic: Option<ProviderErrorDiagnostic> = None;
+                // What this provider will actually send. A pinned alias
+                // substitutes its own model, so reporting `current_model` here
+                // names a (provider, model) pair that was never requested.
+                let reported_model = model_provider.effective_model(current_model);
+                let reported_model = reported_model.as_str();
 
                 for attempt in 0..=self.max_retries {
                     match ProviderDispatch::from_ref(&**model_provider)
@@ -1186,7 +1201,7 @@ impl ModelProvider for ReliableModelProvider {
                                 self.backoff_after_empty_completion(
                                     &mut failures,
                                     provider_name,
-                                    current_model,
+                                    reported_model,
                                     attempt,
                                     &mut backoff_ms,
                                 )
@@ -1209,7 +1224,7 @@ impl ModelProvider for ReliableModelProvider {
                                     primary,
                                     model,
                                     provider_name,
-                                    current_model,
+                                    reported_model,
                                 );
                             }
                             return Ok(resp);
@@ -1230,7 +1245,7 @@ impl ModelProvider for ReliableModelProvider {
                                 push_failure(
                                     &mut failures,
                                     provider_name,
-                                    current_model,
+                                    reported_model,
                                     attempt + 1,
                                     self.max_retries + 1,
                                     "non_retryable",
@@ -1257,7 +1272,7 @@ impl ModelProvider for ReliableModelProvider {
                             push_failure(
                                 &mut failures,
                                 provider_name,
-                                current_model,
+                                reported_model,
                                 attempt + 1,
                                 self.max_retries + 1,
                                 failure_reason,
@@ -1285,7 +1300,7 @@ impl ModelProvider for ReliableModelProvider {
                                     .with_attrs(
                                         provider_failure_attrs(
                                             provider_name,
-                                            current_model,
+                                            reported_model,
                                             &error_detail,
                                             &diagnostic,
                                         )
@@ -1307,7 +1322,7 @@ impl ModelProvider for ReliableModelProvider {
                                     .with_attrs(
                                         provider_retry_attrs(
                                             provider_name,
-                                            current_model,
+                                            reported_model,
                                             attempt + 1,
                                             wait,
                                             failure_reason,
@@ -1330,7 +1345,7 @@ impl ModelProvider for ReliableModelProvider {
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(provider_exhausted_attrs(
                             provider_name,
-                            current_model,
+                            reported_model,
                             last_error_detail.as_deref(),
                             last_diagnostic.as_ref(),
                         )),
@@ -1361,6 +1376,11 @@ impl ModelProvider for ReliableModelProvider {
                 let mut backoff_ms = self.base_backoff_ms;
                 let mut last_error_detail: Option<String> = None;
                 let mut last_diagnostic: Option<ProviderErrorDiagnostic> = None;
+                // What this provider will actually send. A pinned alias
+                // substitutes its own model, so reporting `current_model` here
+                // names a (provider, model) pair that was never requested.
+                let reported_model = model_provider.effective_model(current_model);
+                let reported_model = reported_model.as_str();
 
                 for attempt in 0..=self.max_retries {
                     let req = ChatRequest {
@@ -1380,7 +1400,7 @@ impl ModelProvider for ReliableModelProvider {
                                 self.backoff_after_empty_completion(
                                     &mut failures,
                                     provider_name,
-                                    current_model,
+                                    reported_model,
                                     attempt,
                                     &mut backoff_ms,
                                 )
@@ -1403,7 +1423,7 @@ impl ModelProvider for ReliableModelProvider {
                                     primary,
                                     model,
                                     provider_name,
-                                    current_model,
+                                    reported_model,
                                 );
                             }
                             return Ok(resp);
@@ -1424,7 +1444,7 @@ impl ModelProvider for ReliableModelProvider {
                                 push_failure(
                                     &mut failures,
                                     provider_name,
-                                    current_model,
+                                    reported_model,
                                     attempt + 1,
                                     self.max_retries + 1,
                                     "non_retryable",
@@ -1451,7 +1471,7 @@ impl ModelProvider for ReliableModelProvider {
                             push_failure(
                                 &mut failures,
                                 provider_name,
-                                current_model,
+                                reported_model,
                                 attempt + 1,
                                 self.max_retries + 1,
                                 failure_reason,
@@ -1479,7 +1499,7 @@ impl ModelProvider for ReliableModelProvider {
                                     .with_attrs(
                                         provider_failure_attrs(
                                             provider_name,
-                                            current_model,
+                                            reported_model,
                                             &error_detail,
                                             &diagnostic,
                                         )
@@ -1501,7 +1521,7 @@ impl ModelProvider for ReliableModelProvider {
                                     .with_attrs(
                                         provider_retry_attrs(
                                             provider_name,
-                                            current_model,
+                                            reported_model,
                                             attempt + 1,
                                             wait,
                                             failure_reason,
@@ -1524,7 +1544,7 @@ impl ModelProvider for ReliableModelProvider {
                         .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
                         .with_attrs(provider_exhausted_attrs(
                             provider_name,
-                            current_model,
+                            reported_model,
                             last_error_detail.as_deref(),
                             last_diagnostic.as_ref(),
                         )),

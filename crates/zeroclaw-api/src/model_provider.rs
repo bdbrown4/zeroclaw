@@ -457,6 +457,24 @@ pub trait ModelProvider: Send + Sync + crate::attribution::Attributable {
         ProviderCapabilities::default()
     }
 
+    /// The model this provider will ACTUALLY send, given a requested id.
+    ///
+    /// Almost every provider forwards the request unchanged, hence the default.
+    /// A pinned alias does not: `[providers.models.<family>.<alias>]` with a
+    /// `model` set overrides whatever the caller asked for, and that override is
+    /// precisely how a cross-provider fallback works at all — the chain hands the
+    /// PRIMARY's model id to every entry, and each pinned alias substitutes its
+    /// own.
+    ///
+    /// Failure reporting needs to ask. Without this, an exhausted chain blamed
+    /// every provider for the model the caller originally requested: the real
+    /// 2026-08-08 outage reported `model_provider=gemini
+    /// model=openrouter/auto-beta`, a pairing that never happened. Diagnosis
+    /// went looking for a routing bug that did not exist.
+    fn effective_model(&self, requested: &str) -> String {
+        requested.to_string()
+    }
+
     // ── ModelProvider-family defaults ────────────────────────────────────────────
     // `temperature` is `Option<f64>` end-to-end on the wire. `None` from the
     // caller means "do not send a `temperature` field"; serialization handles
