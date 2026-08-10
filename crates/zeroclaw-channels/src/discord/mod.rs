@@ -1369,6 +1369,16 @@ async fn process_attachments(
                 Some(b) => b,
                 None => continue,
             };
+            // First four bytes as hex. A real Ogg stream starts 4f676753 ("OggS");
+            // anything else means what arrived was not the audio we assumed —
+            // otherwise indistinguishable from a transcriber that simply misheard.
+            let magic: String = bytes
+                .iter()
+                .take(4)
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join("");
+            ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"name": name, "bytes": bytes.len(), "magic": magic})), "downloaded audio attachment for transcription");
             match manager.transcribe(&bytes, name).await {
                 Ok(text) => {
                     let trimmed = text.trim();
@@ -1385,7 +1395,14 @@ async fn process_attachments(
                                 trimmed.len()
                             )
                         );
-                        text_parts.push(format!("[Voice] {trimmed}"));
+                        if looks_like_silence_artefact(trimmed) {
+                            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"name": name, "transcript": trimmed, "bytes": bytes.len()})), "transcript looks like a Whisper silence artefact; not relaying it as speech");
+                            text_parts.push(format!(
+                                "[Voice: could not make out this note. It transcribed only as \"{trimmed}\",                                  which is what the transcriber returns for silence or audio it                                  could not decode. Tell the sender you did not get it and ask them                                  to resend or type it — do NOT treat \"{trimmed}\" as what they said.]"
+                            ));
+                        } else {
+                            text_parts.push(format!("[Voice] {trimmed}"));
+                        }
                         continue;
                     }
                 }
@@ -1442,6 +1459,45 @@ async fn process_attachments(
 
 /// Download an attachment URL into memory, with structured warn-logging on
 /// each failure mode. Returns `None` when the attachment should be skipped.
+/// Whisper's silence artefacts. Given silence, near-silence, or audio it cannot
+/// decode, Whisper does not return an empty string — it emits a short stock
+/// phrase with total confidence. These are the common ones.
+///
+/// This matters because the caller cannot tell the difference between "the user
+/// said thank you" and "there was nothing here". On 2026-08-10 two consecutive
+/// 11-second voice notes both transcribed to exactly "Thank you." (10 chars);
+/// Francis relayed that as though it were speech, and the actual appointment
+/// details were simply gone.
+const WHISPER_SILENCE_ARTEFACTS: &[&str] = &[
+    "thank you",
+    "thanks for watching",
+    "thank you for watching",
+    "you",
+    "bye",
+    "thanks",
+    "thank you.",
+    "please subscribe",
+];
+
+/// Does this transcript look like Whisper heard nothing?
+///
+/// Deliberately narrow: it only fires on a transcript that is ENTIRELY one stock
+/// phrase. A real "thank you" inside a longer sentence is untouched, and the
+/// cost of a false positive is a prompt to repeat the message rather than a
+/// silently invented one.
+fn looks_like_silence_artefact(transcript: &str) -> bool {
+    let normalized: String = transcript
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .collect();
+    let normalized = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    WHISPER_SILENCE_ARTEFACTS
+        .iter()
+        .any(|a| normalized == a.trim_end_matches('.'))
+}
+
 async fn download_attachment_bytes(
     client: &reqwest::Client,
     url: &str,
@@ -8327,6 +8383,33 @@ mod tests {
         // No focused option at all.
         let p = serde_json::json!({ "data": { "name": "deploy", "options": [] } });
         assert!(arm_choices(&specs, slash_options::extract_focused_option(&p), true).is_empty());
+    }
+
+    #[test]
+    fn looks_like_silence_artefact_catches_whisper_filler() {
+        // The exact 2026-08-10 case: two 11-second notes, both transcribed to
+        // this and nothing else.
+        assert!(looks_like_silence_artefact("Thank you."));
+        assert!(looks_like_silence_artefact("  thank you  "));
+        assert!(looks_like_silence_artefact("Thanks for watching!"));
+        assert!(looks_like_silence_artefact("you"));
+        assert!(looks_like_silence_artefact("Bye."));
+    }
+
+    #[test]
+    fn looks_like_silence_artefact_leaves_real_speech_alone() {
+        // Must only fire when the WHOLE transcript is the stock phrase. A real
+        // note that happens to contain a thank-you is speech, and a false
+        // positive here would discard the user's actual words.
+        assert!(!looks_like_silence_artefact(
+            "Thank you, can you add a dentist appointment on Thursday at 2"
+        ));
+        assert!(!looks_like_silence_artefact("thanks for grabbing that"));
+        assert!(!looks_like_silence_artefact(
+            "This is a new appointment on the 14th at 9am"
+        ));
+        assert!(!looks_like_silence_artefact("bye for now, talk later"));
+        assert!(!looks_like_silence_artefact(""));
     }
 
     #[test]
