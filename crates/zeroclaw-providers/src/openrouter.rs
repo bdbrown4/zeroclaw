@@ -159,6 +159,13 @@ struct NativeChatResponse {
     choices: Vec<NativeChoice>,
     #[serde(default)]
     usage: Option<UsageInfo>,
+    /// The model that ACTUALLY served this request. OpenRouter always returns
+    /// it, and it is the whole point when `model` was a router alias like
+    /// `openrouter/auto-beta`: the alias resolves to a different real model per
+    /// request, so it is the only way to know what to price. This field was
+    /// previously absent from the struct, so serde silently dropped it.
+    #[serde(default)]
+    model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -172,6 +179,12 @@ struct UsageInfo {
     /// do not support prompt caching.
     #[serde(default)]
     prompt_tokens_details: Option<PromptTokensDetails>,
+    /// OpenRouter's own USD figure for the request, present when the request
+    /// asked for usage accounting. Authoritative — it already accounts for cache
+    /// discounts and per-model tiers, and unlike a local rate table it cannot
+    /// drift. Also previously dropped by serde.
+    #[serde(default)]
+    cost: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -469,8 +482,21 @@ impl OpenRouterModelProvider {
     /// Serialize `request` to JSON, merge `self.extra_body` keys at the top
     /// level (extra_body wins on conflicts), and return the merged Value.
     fn merge_extra_body<T: Serialize>(&self, request: &T) -> anyhow::Result<serde_json::Value> {
+        // Ask for usage accounting on every request. Without `usage.include`
+        // OpenRouter omits its own `cost` from the response, and that figure is
+        // the only reliable price for a router alias whose resolved model - and
+        // therefore its rate - changes per request. Applied BEFORE the
+        // provider_extra merge, so an operator who sets `usage` explicitly still
+        // wins, since extra_body has the last write.
+        let with_usage = |mut v: serde_json::Value| -> serde_json::Value {
+            if let Some(obj) = v.as_object_mut() {
+                obj.entry("usage")
+                    .or_insert_with(|| serde_json::json!({"include": true}));
+            }
+            v
+        };
         let Some(extra) = &self.extra_body else {
-            return Ok(serde_json::to_value(request)?);
+            return Ok(with_usage(serde_json::to_value(request)?));
         };
         let overrides = extra.as_object().ok_or_else(|| {
             ::zeroclaw_log::record!(
@@ -484,7 +510,7 @@ impl OpenRouterModelProvider {
                 "provider_extra must be a JSON object, got: {extra}"
             ))
         })?;
-        let mut value = serde_json::to_value(request)?;
+        let mut value = with_usage(serde_json::to_value(request)?);
         if let Some(base) = value.as_object_mut() {
             for (k, v) in overrides {
                 base.insert(k.clone(), v.clone());
@@ -759,10 +785,16 @@ impl ModelProvider for OpenRouterModelProvider {
         // `usage.prompt_tokens_details.cached_tokens` when the upstream
         // provider supports prompt caching. For providers without caching
         // the field is absent and we report `None`.
+        // `resolved_model` is read BEFORE `usage` is moved: for a router alias
+        // it is the only record of what actually ran, and pricing the alias
+        // instead is why every such call has been logged at $0.00.
+        let resolved_model = native_response.model.clone();
         let usage = native_response.usage.map(|u| TokenUsage {
             input_tokens: u.prompt_tokens,
             output_tokens: u.completion_tokens,
             cached_input_tokens: u.prompt_tokens_details.and_then(|d| d.cached_tokens),
+            resolved_model: resolved_model.clone(),
+            reported_cost_usd: u.cost,
         });
         let message = native_response
             .choices
@@ -985,10 +1017,16 @@ impl ModelProvider for OpenRouterModelProvider {
         // `usage.prompt_tokens_details.cached_tokens` when the upstream
         // provider supports prompt caching. For providers without caching
         // the field is absent and we report `None`.
+        // `resolved_model` is read BEFORE `usage` is moved: for a router alias
+        // it is the only record of what actually ran, and pricing the alias
+        // instead is why every such call has been logged at $0.00.
+        let resolved_model = native_response.model.clone();
         let usage = native_response.usage.map(|u| TokenUsage {
             input_tokens: u.prompt_tokens,
             output_tokens: u.completion_tokens,
             cached_input_tokens: u.prompt_tokens_details.and_then(|d| d.cached_tokens),
+            resolved_model: resolved_model.clone(),
+            reported_cost_usd: u.cost,
         });
         let message = native_response
             .choices
@@ -1690,6 +1728,7 @@ mod tests {
                 input_tokens: u.prompt_tokens,
                 output_tokens: u.completion_tokens,
                 cached_input_tokens: u.prompt_tokens_details.and_then(|d| d.cached_tokens),
+                ..Default::default()
             })
             .expect("usage should be Some");
         assert_eq!(usage.input_tokens, Some(25000));
@@ -1710,6 +1749,7 @@ mod tests {
                 input_tokens: u.prompt_tokens,
                 output_tokens: u.completion_tokens,
                 cached_input_tokens: u.prompt_tokens_details.and_then(|d| d.cached_tokens),
+                ..Default::default()
             })
             .expect("usage should be Some");
         assert!(
@@ -1980,8 +2020,15 @@ mod tests {
             max_tokens: None,
         };
 
-        let base = serde_json::to_value(&request).unwrap();
+        let mut base = serde_json::to_value(&request).unwrap();
         let merged = model_provider.merge_extra_body(&request).unwrap();
+        // Usage accounting is now requested unconditionally: OpenRouter omits
+        // its `cost` field without it, and that figure is the only reliable
+        // price for a router alias. Everything else must be untouched.
+        assert_eq!(merged.get("usage"), Some(&serde_json::json!({"include": true})));
+        base.as_object_mut()
+            .unwrap()
+            .insert("usage".into(), serde_json::json!({"include": true}));
         assert_eq!(base, merged);
     }
 
@@ -1996,8 +2043,15 @@ mod tests {
             max_tokens: None,
         };
 
-        let base = serde_json::to_value(&request).unwrap();
+        let mut base = serde_json::to_value(&request).unwrap();
         let merged = model_provider.merge_extra_body(&request).unwrap();
+        // Usage accounting is now requested unconditionally: OpenRouter omits
+        // its `cost` field without it, and that figure is the only reliable
+        // price for a router alias. Everything else must be untouched.
+        assert_eq!(merged.get("usage"), Some(&serde_json::json!({"include": true})));
+        base.as_object_mut()
+            .unwrap()
+            .insert("usage".into(), serde_json::json!({"include": true}));
         assert_eq!(base, merged);
     }
 
@@ -2056,6 +2110,57 @@ mod tests {
             &serde_json::json!(["middle-out"])
         );
         assert!(obj.get("extra_body").is_none());
+    }
+
+    #[test]
+    fn resolved_model_and_cost_are_captured_from_the_response() {
+        // The router case: `model` was sent as openrouter/auto-beta, and the
+        // response says what actually ran. Both fields used to be absent from
+        // the structs, so serde dropped them and every such call priced at $0.
+        let body = serde_json::json!({
+            "model": "anthropic/claude-sonnet-5",
+            "choices": [{"message": {"role": "assistant", "content": "hi"}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 20, "cost": 0.00123}
+        })
+        .to_string();
+        let parsed: NativeChatResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed.model.as_deref(), Some("anthropic/claude-sonnet-5"));
+        let u = parsed.usage.unwrap();
+        assert_eq!(u.cost, Some(0.00123));
+        assert_eq!(u.prompt_tokens, Some(100));
+    }
+
+    #[test]
+    fn response_without_model_or_cost_still_parses() {
+        // Every non-router provider on this wire format omits both. Absence must
+        // stay a clean None, not a deserialization failure.
+        let body = serde_json::json!({
+            "choices": [{"message": {"role": "assistant", "content": "hi"}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 1}
+        })
+        .to_string();
+        let parsed: NativeChatResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed.model, None);
+        assert_eq!(parsed.usage.unwrap().cost, None);
+    }
+
+    #[test]
+    fn operator_usage_override_wins_over_the_default() {
+        // extra_body has the last write, so an operator who sets `usage`
+        // explicitly keeps their value rather than silently getting ours.
+        let model_provider = OpenRouterModelProvider::new("test", Some("key"), None)
+            .with_extra_body(serde_json::json!({"usage": {"include": false}}));
+        let request = ChatRequest {
+            model: "test-model".into(),
+            messages: vec![],
+            temperature: None,
+            max_tokens: None,
+        };
+        let merged = model_provider.merge_extra_body(&request).unwrap();
+        assert_eq!(
+            merged.get("usage"),
+            Some(&serde_json::json!({"include": false}))
+        );
     }
 
     #[test]

@@ -424,6 +424,7 @@ mod cost_usd_regression_tests {
                 input_tokens: Some(input_tokens),
                 output_tokens: Some(output_tokens),
                 cached_input_tokens: Some(0),
+                ..Default::default()
             }),
             reasoning_content: None,
         };

@@ -281,13 +281,22 @@ pub fn record_tool_loop_cost_usage(
         .try_with(Clone::clone)
         .ok()
         .flatten()?;
+
+    // Price — and RECORD — the model that actually ran, not the one requested.
+    // For a router alias like `openrouter/auto-beta` the two differ on every
+    // request, and pricing the alias is why 749 calls were logged at $0.00: no
+    // rate could ever match a name that is not a billable model. Falls back to
+    // the requested model for ordinary pinned providers, which is the same
+    // string anyway.
+    let billed_model = usage.resolved_model.as_deref().unwrap_or(model);
+
     let pricing = provider_pricing(&ctx.model_provider_pricing, model_provider_name);
     let (input_rate, output_rate, cached_rate) = pricing
-        .map(|map| resolve_rates(map, model))
+        .map(|map| resolve_rates(map, billed_model))
         .unwrap_or((0.0, 0.0, 0.0));
 
-    let cost_usage = CostTokenUsage::new_with_cache(
-        model,
+    let mut cost_usage = CostTokenUsage::new_with_cache(
+        billed_model,
         input_tokens,
         cached_input_tokens,
         output_tokens,
@@ -295,6 +304,18 @@ pub fn record_tool_loop_cost_usage(
         cached_rate,
         output_rate,
     );
+
+    // The provider's own figure wins when it gives one. It is authoritative
+    // about its own billing, already accounts for cache discounts and per-model
+    // tiers, and cannot drift out of date the way a local rate table does.
+    // Guarded on finite and non-negative so a malformed field cannot poison the
+    // running total the daily cap is measured against.
+    if let Some(reported) = usage.reported_cost_usd
+        && reported.is_finite()
+        && reported >= 0.0
+    {
+        cost_usage.cost_usd = reported;
+    }
 
     // Promote first sighting of (model_provider, model) without pricing to a WARN
     // so operators notice the silent zero-cost record before they need to
@@ -701,6 +722,7 @@ mod tests {
             input_tokens: Some(5_000),
             output_tokens: Some(200),
             cached_input_tokens: Some(4_000),
+            ..Default::default()
         };
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -748,6 +770,7 @@ mod tests {
             input_tokens: Some(5_000),
             output_tokens: Some(200),
             cached_input_tokens: Some(4_000),
+            ..Default::default()
         };
 
         let runtime = tokio::runtime::Runtime::new().unwrap();

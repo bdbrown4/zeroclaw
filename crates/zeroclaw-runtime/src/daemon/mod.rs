@@ -1624,6 +1624,7 @@ mod tests {
                 excluded_tools: vec![],
                 reply_min_interval_secs: 0,
                 reply_queue_depth_max: 0,
+                ..Default::default()
             },
         );
         config.channels.discord.insert(
@@ -1651,6 +1652,7 @@ mod tests {
                 excluded_tools: vec![],
                 reply_min_interval_secs: 0,
                 reply_queue_depth_max: 0,
+                ..Default::default()
             },
         );
         assert!(!has_supervised_channels(&config));

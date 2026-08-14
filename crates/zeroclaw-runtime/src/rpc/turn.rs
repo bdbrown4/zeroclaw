@@ -442,6 +442,7 @@ mod tests {
                         input_tokens: Some(1_000),
                         cached_input_tokens: None,
                         output_tokens: Some(200),
+                        ..Default::default()
                     }),
                     reasoning_content: None,
                 })

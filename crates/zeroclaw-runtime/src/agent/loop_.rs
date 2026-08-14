@@ -12762,6 +12762,7 @@ Let me check the result."#;
                     input_tokens: Some(1_000),
                     output_tokens: Some(200),
                     cached_input_tokens: None,
+                    ..Default::default()
                 }),
                 reasoning_content: None,
             }]))),
@@ -13040,6 +13041,7 @@ Let me check the result."#;
                     input_tokens: Some(500),
                     output_tokens: Some(100),
                     cached_input_tokens: None,
+                    ..Default::default()
                 }),
                 reasoning_content: None,
             }]))),
@@ -13262,6 +13264,7 @@ Let me check the result."#;
                     input_tokens: Some(800),
                     output_tokens: Some(120),
                     cached_input_tokens: None,
+                    ..Default::default()
                 }),
                 reasoning_content: None,
             }]))),
@@ -13332,6 +13335,7 @@ Let me check the result."#;
                     input_tokens: Some(800),
                     output_tokens: Some(120),
                     cached_input_tokens: None,
+                    ..Default::default()
                 }),
                 reasoning_content: None,
             }]))),

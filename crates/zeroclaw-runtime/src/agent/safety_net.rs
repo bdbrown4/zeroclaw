@@ -69,6 +69,7 @@ fn token_usage(input: u64, output: u64) -> TokenUsage {
         input_tokens: Some(input),
         cached_input_tokens: None,
         output_tokens: Some(output),
+        ..Default::default()
     }
 }
 

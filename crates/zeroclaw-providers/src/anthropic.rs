@@ -720,6 +720,7 @@ impl AnthropicModelProvider {
                 input_tokens: if any_reported { Some(total) } else { None },
                 output_tokens: u.output_tokens,
                 cached_input_tokens: u.cache_read_input_tokens,
+                ..Default::default()
             }
         });
 
@@ -1097,6 +1098,7 @@ impl AnthropicModelProvider {
                                 input_tokens: normalized_input,
                                 output_tokens,
                                 cached_input_tokens,
+                                ..Default::default()
                             })))
                             .await;
                     }

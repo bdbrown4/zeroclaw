@@ -140,6 +140,25 @@ pub struct TokenUsage {
     /// prompt cache (Anthropic `cache_read_input_tokens`,
     /// OpenAI `prompt_tokens_details.cached_tokens`).
     pub cached_input_tokens: Option<u64>,
+    /// The model the provider says ACTUALLY served this request, when it differs
+    /// from the one asked for.
+    ///
+    /// This exists for routers. `openrouter/auto-beta` is an alias that resolves
+    /// to a different real model per request, so pricing the configured string
+    /// prices a name that never runs: every one of 749 such calls was recorded
+    /// at $0.00 because no rate could ever match. OpenRouter returns the real
+    /// model in the response body; this is where it lands.
+    ///
+    /// `None` means "same as requested", which is the case for every ordinary
+    /// pinned provider.
+    pub resolved_model: Option<String>,
+    /// Cost in USD as reported BY the provider, when it reports one.
+    ///
+    /// Preferred over local rate-card arithmetic when present: the provider is
+    /// authoritative about its own billing, it already accounts for cache
+    /// discounts and per-model tiers, and it cannot drift out of date the way a
+    /// hand-maintained rate table does.
+    pub reported_cost_usd: Option<f64>,
 }
 
 /// An LLM response that may contain text, tool calls, or both.

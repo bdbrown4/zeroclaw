@@ -140,6 +140,7 @@ impl ModelProvider for TraceLlmProvider {
                     input_tokens: Some(input_tokens),
                     output_tokens: Some(output_tokens),
                     cached_input_tokens: None,
+                    ..Default::default()
                 }),
                 reasoning_content: None,
             }),
@@ -164,6 +165,7 @@ impl ModelProvider for TraceLlmProvider {
                         input_tokens: Some(input_tokens),
                         output_tokens: Some(output_tokens),
                         cached_input_tokens: None,
+                        ..Default::default()
                     }),
                     reasoning_content: None,
                 })

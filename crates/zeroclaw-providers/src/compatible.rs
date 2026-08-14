@@ -912,6 +912,7 @@ impl UsageInfo {
             input_tokens: self.prompt_tokens,
             output_tokens: self.completion_tokens,
             cached_input_tokens,
+            ..Default::default()
         }
     }
 }
