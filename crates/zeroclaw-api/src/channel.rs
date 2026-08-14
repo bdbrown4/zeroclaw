@@ -475,6 +475,25 @@ pub trait Channel: Send + Sync + crate::attribution::Attributable {
         Ok(None)
     }
 
+    /// Where a reply bound for `reply_target` must be approved before it is
+    /// sent, or `None` to send it straight out.
+    ///
+    /// This is how an operator keeps the agent's *judgement* about whether to
+    /// speak while keeping the *decision* to publish: the agent still composes
+    /// the reply and still decides one is warranted; the operator sees the
+    /// finished text and releases it.
+    ///
+    /// Scope note, because this is easy to over-read. The gate holds a
+    /// SENTENCE, not a turn. The tool loop has already run to completion by the
+    /// time a reply exists, so whatever the agent DID during the turn has
+    /// already happened. This is publication control, not containment, and it
+    /// is not a substitute for restricting which tools a turn can reach.
+    ///
+    /// Default `None` leaves every other channel exactly as it was.
+    fn reply_approval_recipient(&self, _reply_target: &str) -> Option<String> {
+        None
+    }
+
     /// The name of the back-channel that produced the most recent
     /// [`Channel::request_approval`] decision, when this channel fans a single
     /// request out to several registered back-channels (the agent's approval

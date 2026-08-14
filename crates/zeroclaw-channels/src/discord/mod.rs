@@ -86,6 +86,11 @@ pub struct DiscordChannel {
     /// `mention_exempt_channel_ids`). Treated exactly like a DM: conversational,
     /// no @mention required — while other channels stay mention-only.
     mention_exempt_channel_ids: Vec<String>,
+    /// Channel id where an outbound reply must be approved before it is sent.
+    /// Empty disables the gate entirely (the default, and the behaviour every
+    /// existing install keeps). Replies bound FOR this channel are never gated
+    /// — otherwise the approval prompt would need approving.
+    reply_approval_channel_id: String,
     /// Raw IDENTIFY mask override (config `intents_mask`). `Some` wins over
     /// everything `gateway_intents()` would derive — including `Some(0)`,
     /// a legal IDENTIFY value. Intents are connection-scoped (sent once in
@@ -194,6 +199,7 @@ impl DiscordChannel {
             listen_to_bots,
             mention_only,
             mention_exempt_channel_ids: vec![],
+            reply_approval_channel_id: String::new(),
             intents_mask_override: None,
             reaction_scope: zeroclaw_config::schema::DiscordReactionScope::Off,
             typing_handles: Mutex::new(HashMap::new()),
@@ -358,6 +364,11 @@ impl DiscordChannel {
 
     pub fn with_mention_exempt_channel_ids(mut self, ids: Vec<String>) -> Self {
         self.mention_exempt_channel_ids = ids;
+        self
+    }
+
+    pub fn with_reply_approval_channel_id(mut self, id: String) -> Self {
+        self.reply_approval_channel_id = id;
         self
     }
 
@@ -4334,6 +4345,22 @@ impl Channel for DiscordChannel {
         }
 
         Ok(())
+    }
+
+    /// Gate replies to every channel EXCEPT the approval channel itself.
+    ///
+    /// `reply_target` may carry a `:thread` suffix (see `SendMessage::reply_to`),
+    /// so compare on the channel root only — otherwise every threaded reply
+    /// would look like a different channel and get gated twice.
+    fn reply_approval_recipient(&self, reply_target: &str) -> Option<String> {
+        if self.reply_approval_channel_id.is_empty() {
+            return None;
+        }
+        let root = reply_target.split(':').next().unwrap_or(reply_target);
+        if root == self.reply_approval_channel_id {
+            return None;
+        }
+        Some(self.reply_approval_channel_id.clone())
     }
 
     async fn request_approval(
@@ -8410,6 +8437,70 @@ mod tests {
         ));
         assert!(!looks_like_silence_artefact("bye for now, talk later"));
         assert!(!looks_like_silence_artefact(""));
+    }
+
+    #[test]
+    fn reply_gate_off_by_default() {
+        // Every existing install must be untouched: no config, no gate.
+        let ch = DiscordChannel::new(
+            "t".into(),
+            vec![],
+            "default",
+            std::sync::Arc::new(Vec::new),
+            false,
+            true,
+        );
+        assert_eq!(ch.reply_approval_recipient("999"), None);
+    }
+
+    #[test]
+    fn reply_gate_holds_other_channels() {
+        let ch = DiscordChannel::new(
+            "t".into(),
+            vec![],
+            "default",
+            std::sync::Arc::new(Vec::new),
+            false,
+            true,
+        )
+            .with_reply_approval_channel_id("111".into());
+        assert_eq!(ch.reply_approval_recipient("999"), Some("111".to_string()));
+    }
+
+    #[test]
+    fn reply_gate_never_gates_the_approval_channel_itself() {
+        // Otherwise the approval prompt would need approving, and the private
+        // channel would stop being conversational.
+        let ch = DiscordChannel::new(
+            "t".into(),
+            vec![],
+            "default",
+            std::sync::Arc::new(Vec::new),
+            false,
+            true,
+        )
+            .with_reply_approval_channel_id("111".into());
+        assert_eq!(ch.reply_approval_recipient("111"), None);
+    }
+
+    #[test]
+    fn reply_gate_ignores_the_thread_suffix() {
+        // SendMessage::reply_to builds "<channel>:<thread>". Comparing the whole
+        // string would gate every threaded reply in the approval channel too.
+        let ch = DiscordChannel::new(
+            "t".into(),
+            vec![],
+            "default",
+            std::sync::Arc::new(Vec::new),
+            false,
+            true,
+        )
+            .with_reply_approval_channel_id("111".into());
+        assert_eq!(ch.reply_approval_recipient("111:22334455"), None);
+        assert_eq!(
+            ch.reply_approval_recipient("999:22334455"),
+            Some("111".to_string())
+        );
     }
 
     #[test]

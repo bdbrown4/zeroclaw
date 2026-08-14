@@ -12471,6 +12471,22 @@ pub struct DiscordConfig {
     #[tab(Behavior)]
     #[serde(default)]
     pub mention_exempt_channel_ids: Vec<String>,
+    /// Channel id where an outbound reply must be approved before it is sent.
+    ///
+    /// Empty (default) disables the gate; every existing install is unaffected.
+    /// When set, a reply bound for any OTHER channel is held and an approval
+    /// prompt is posted here; the operator gets Allow / Deny buttons and can
+    /// edit the text before releasing it. Replies to this channel itself are
+    /// never gated, or the prompt would need approving.
+    ///
+    /// The agent's own judgement about WHETHER to reply is untouched — this
+    /// only decides whether the finished text is published. Note the scope: the
+    /// tool loop has already run by the time a reply exists, so this holds a
+    /// sentence, not a turn, and is not a substitute for limiting which tools a
+    /// turn can reach.
+    #[tab(Behavior)]
+    #[serde(default)]
+    pub reply_approval_channel_id: String,
     /// When true, register and serve Discord slash commands (e.g. `/ask`)
     /// over the Gateway WebSocket, in addition to message handling. Default
     /// false. (Prototype: currently registers a single `/ask <prompt>`.)
@@ -22593,6 +22609,10 @@ default_temperature = 0.7
             excluded_tools: vec![],
             reply_min_interval_secs: 0,
             reply_queue_depth_max: 0,
+            // Spread, not an exhaustive list: this literal already went stale
+            // once when `mention_exempt_channel_ids` was added on francis-patches
+            // and nothing rebuilt this crate's tests.
+            ..Default::default()
         };
         let json = serde_json::to_string(&dc).unwrap();
         let parsed: DiscordConfig = serde_json::from_str(&json).unwrap();
@@ -22624,6 +22644,10 @@ default_temperature = 0.7
             excluded_tools: vec![],
             reply_min_interval_secs: 0,
             reply_queue_depth_max: 0,
+            // Spread, not an exhaustive list: this literal already went stale
+            // once when `mention_exempt_channel_ids` was added on francis-patches
+            // and nothing rebuilt this crate's tests.
+            ..Default::default()
         };
         let json = serde_json::to_string(&dc).unwrap();
         let parsed: DiscordConfig = serde_json::from_str(&json).unwrap();

@@ -5463,6 +5463,64 @@ async fn process_channel_message_body(
                 }
             }
 
+            // ── Reply-approval gate ──────────────────────────────────────
+            // Placed HERE, above the outbound log and the history append below,
+            // for one reason: a reply that is never sent must not be recorded as
+            // one. Gating any lower would leave an assistant turn in history that
+            // the other side never saw, and the next turn would build on a
+            // sentence that does not exist.
+            //
+            // The agent keeps its own judgement about WHETHER to answer — that
+            // decision already happened upstream. This only decides whether the
+            // finished text is published.
+            //
+            // Read the scope honestly: the tool loop finished long before this
+            // point, so anything the turn DID has already happened. This holds a
+            // sentence, not a turn.
+            if let Some(channel) = target_channel.as_ref()
+                && let Some(approver) = channel.reply_approval_recipient(&msg.reply_target)
+            {
+                let preview: String = delivered_response.chars().take(1500).collect();
+                let req = zeroclaw_api::channel::ChannelApprovalRequest {
+                    tool_name: "reply".to_string(),
+                    arguments_summary: format!(
+                        "to #{} - in reply to {}\n\n{}",
+                        msg.reply_target.split(':').next().unwrap_or(&msg.reply_target),
+                        msg.sender,
+                        preview
+                    ),
+                    raw_arguments: None,
+                };
+                let decision = channel.request_approval(&approver, &req).await;
+                let approved = match decision {
+                    Ok(Some(zeroclaw_api::channel::ChannelApprovalResponse::Approve))
+                    | Ok(Some(zeroclaw_api::channel::ChannelApprovalResponse::AlwaysApprove)) => true,
+                    // The operator rewrote it. Send THEIR text, not the model's.
+                    Ok(Some(zeroclaw_api::channel::ChannelApprovalResponse::DenyWithEdit {
+                        ref replacement,
+                    })) => {
+                        delivered_response = replacement.clone();
+                        true
+                    }
+                    // Deny, timeout (None), or a transport error all land here.
+                    // Fail CLOSED: silence is the safe outcome for a gate whose
+                    // whole purpose is to withhold publication.
+                    _ => false,
+                };
+                if !approved {
+                    ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"reply_target": msg.reply_target, "sender": msg.sender, "approver": approver, "suppressed": scrub_credentials(&delivered_response)})), "reply suppressed: not approved");
+                    // Close the user turn so the next message does not inherit
+                    // this one as unfinished context, mirroring the rolled-back
+                    // error path above.
+                    append_sender_turn(
+                        ctx.as_ref(),
+                        &history_key,
+                        ChatMessage::assistant("[Reply withheld \u{2014} not approved]"),
+                    );
+                    return;
+                }
+            }
+
             ::zeroclaw_log::record!(
                 INFO,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Outbound)
@@ -6337,6 +6395,7 @@ fn build_channel_by_id(
                 )
                 .with_channel_ids(dc.channel_ids.clone())
                 .with_mention_exempt_channel_ids(dc.mention_exempt_channel_ids.clone())
+        .with_reply_approval_channel_id(dc.reply_approval_channel_id.clone())
                 .with_workspace_dir(workspace_dir)
                 .with_streaming(
                     dc.stream_mode,
@@ -7441,6 +7500,7 @@ fn collect_configured_channels(
         )
         .with_channel_ids(dc.channel_ids.clone())
         .with_mention_exempt_channel_ids(dc.mention_exempt_channel_ids.clone())
+        .with_reply_approval_channel_id(dc.reply_approval_channel_id.clone())
         .with_workspace_dir(config.channel_workspace_dir(&format!("discord.{alias}")))
         .with_streaming(
             dc.stream_mode,
@@ -10116,6 +10176,7 @@ pub async fn deliver_announcement(
             )
             .with_channel_ids(dc.channel_ids.clone())
             .with_mention_exempt_channel_ids(dc.mention_exempt_channel_ids.clone())
+        .with_reply_approval_channel_id(dc.reply_approval_channel_id.clone())
             .with_workspace_dir(config.channel_workspace_dir(channel));
             zeroclaw_api::channel::Channel::send(&ch, &make_msg(&safe_output)).await?;
         }
