@@ -12485,6 +12485,23 @@ pub struct DiscordConfig {
     #[tab(Behavior)]
     #[serde(default)]
     pub mention_aliases: Vec<String>,
+    /// Discord user IDs whose messages produce UNGATED replies -- normally just
+    /// the operator's own ID. `reply_approval_channel_id` exists so you vet what
+    /// the bot says to other people; when you are the one being answered there is
+    /// nothing to vet, and gating it would make you approve every sentence of
+    /// your own conversation.
+    ///
+    /// Matched against the Discord author snowflake from the gateway payload,
+    /// which Discord sets server-side. It is never parsed out of message text,
+    /// so no message can claim to come from someone it did not.
+    ///
+    /// Scope: this waives review of what the bot SAYS to you. It does not change
+    /// what a turn may DO -- tool approval is a separate gate.
+    ///
+    /// Empty (default) = every reply outside the approval channel stays gated.
+    #[tab(Behavior)]
+    #[serde(default)]
+    pub reply_approval_exempt_senders: Vec<String>,
     /// Channel id where an outbound reply must be approved before it is sent.
     ///
     /// Empty (default) disables the gate; every existing install is unaffected.

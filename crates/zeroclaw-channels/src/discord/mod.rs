@@ -89,6 +89,9 @@ pub struct DiscordChannel {
     /// Names that count as addressing the bot without an `<@id>` tag (config
     /// `mention_aliases`). Widens the `mention_only` gate; never bypasses it.
     mention_aliases: Vec<String>,
+    /// Senders whose replies skip the approval gate (config
+    /// `reply_approval_exempt_senders`) -- normally just the operator.
+    reply_approval_exempt_senders: Vec<String>,
     /// Channel id where an outbound reply must be approved before it is sent.
     /// Empty disables the gate entirely (the default, and the behaviour every
     /// existing install keeps). Replies bound FOR this channel are never gated
@@ -203,6 +206,7 @@ impl DiscordChannel {
             mention_only,
             mention_exempt_channel_ids: vec![],
             mention_aliases: vec![],
+            reply_approval_exempt_senders: vec![],
             reply_approval_channel_id: String::new(),
             intents_mask_override: None,
             reaction_scope: zeroclaw_config::schema::DiscordReactionScope::Off,
@@ -373,6 +377,11 @@ impl DiscordChannel {
 
     pub fn with_mention_aliases(mut self, names: Vec<String>) -> Self {
         self.mention_aliases = names;
+        self
+    }
+
+    pub fn with_reply_approval_exempt_senders(mut self, ids: Vec<String>) -> Self {
+        self.reply_approval_exempt_senders = ids;
         self
     }
 
@@ -4407,13 +4416,27 @@ impl Channel for DiscordChannel {
         Ok(())
     }
 
-    /// Gate replies to every channel EXCEPT the approval channel itself.
+    /// Gate replies to every channel EXCEPT the approval channel itself, and
+    /// except replies to a sender listed in `reply_approval_exempt_senders`.
     ///
     /// `reply_target` may carry a `:thread` suffix (see `SendMessage::reply_to`),
     /// so compare on the channel root only — otherwise every threaded reply
     /// would look like a different channel and get gated twice.
-    fn reply_approval_recipient(&self, reply_target: &str) -> Option<String> {
+    fn reply_approval_recipient(&self, reply_target: &str, sender: &str) -> Option<String> {
         if self.reply_approval_channel_id.is_empty() {
+            return None;
+        }
+        // Answering the operator needs no operator review. `sender` is the
+        // gateway's author snowflake, not anything read out of the message, so a
+        // stranger cannot write their way into this branch. Both sides are
+        // checked non-empty so a stray blank entry in config cannot match a
+        // sender the transport failed to populate.
+        if !sender.is_empty()
+            && self
+                .reply_approval_exempt_senders
+                .iter()
+                .any(|s| !s.is_empty() && s == sender)
+        {
             return None;
         }
         let root = reply_target.split(':').next().unwrap_or(reply_target);
@@ -8545,6 +8568,120 @@ mod tests {
     }
 
     #[test]
+    fn reply_gate_waives_review_for_an_exempt_sender() {
+        // The operator asked the question and is reading the answer; making him
+        // approve it would mean approving every sentence of his own conversation.
+        let ch = DiscordChannel::new(
+            "t".into(),
+            vec![],
+            "default",
+            std::sync::Arc::new(Vec::new),
+            false,
+            true,
+        )
+        .with_reply_approval_channel_id("111".into())
+        .with_reply_approval_exempt_senders(vec!["owner-1".into()]);
+        // Same channel, same reply -- the ONLY difference is who is being answered.
+        assert_eq!(ch.reply_approval_recipient("999", "owner-1"), None);
+        assert_eq!(
+            ch.reply_approval_recipient("999", "stranger-2"),
+            Some("111".to_string())
+        );
+        // And it holds in threads, where the target carries a suffix.
+        assert_eq!(ch.reply_approval_recipient("999:4242", "owner-1"), None);
+    }
+
+    #[test]
+    fn reply_gate_exemption_is_inert_when_unconfigured() {
+        // Default must be byte-identical to the gate as shipped: everyone gated.
+        let ch = DiscordChannel::new(
+            "t".into(),
+            vec![],
+            "default",
+            std::sync::Arc::new(Vec::new),
+            false,
+            true,
+        )
+        .with_reply_approval_channel_id("111".into());
+        assert_eq!(
+            ch.reply_approval_recipient("999", "owner-1"),
+            Some("111".to_string())
+        );
+    }
+
+    #[test]
+    fn reply_gate_exemption_never_matches_a_blank_identity() {
+        // Two ways this could fail open: a blank entry in config, or a transport
+        // that failed to populate the sender. Either one matching "" would waive
+        // the gate for EVERY reply. Neither may.
+        let blank_cfg = DiscordChannel::new(
+            "t".into(),
+            vec![],
+            "default",
+            std::sync::Arc::new(Vec::new),
+            false,
+            true,
+        )
+        .with_reply_approval_channel_id("111".into())
+        .with_reply_approval_exempt_senders(vec![String::new(), "  ".into()]);
+        assert_eq!(
+            blank_cfg.reply_approval_recipient("999", ""),
+            Some("111".to_string())
+        );
+        assert_eq!(
+            blank_cfg.reply_approval_recipient("999", "stranger-2"),
+            Some("111".to_string())
+        );
+
+        let real_cfg = DiscordChannel::new(
+            "t".into(),
+            vec![],
+            "default",
+            std::sync::Arc::new(Vec::new),
+            false,
+            true,
+        )
+        .with_reply_approval_channel_id("111".into())
+        .with_reply_approval_exempt_senders(vec!["owner-1".into()]);
+        assert_eq!(
+            real_cfg.reply_approval_recipient("999", ""),
+            Some("111".to_string())
+        );
+    }
+
+    #[test]
+    fn reply_gate_exemption_requires_an_exact_sender_match() {
+        // Substring or prefix matching on a snowflake would let a neighbouring
+        // id inherit the operator's exemption.
+        let ch = DiscordChannel::new(
+            "t".into(),
+            vec![],
+            "default",
+            std::sync::Arc::new(Vec::new),
+            false,
+            true,
+        )
+        .with_reply_approval_channel_id("111".into())
+        .with_reply_approval_exempt_senders(vec!["292819074688352257".into()]);
+        assert_eq!(
+            ch.reply_approval_recipient("999", "292819074688352257"),
+            None
+        );
+        for impostor in [
+            "29281907468835225",   // truncated
+            "2928190746883522570", // extended
+            "1292819074688352257", // prefixed
+            " 292819074688352257", // padded
+        ] {
+            assert_eq!(
+                ch.reply_approval_recipient("999", impostor),
+                Some("111".to_string()),
+                "{impostor} must not inherit the exemption"
+            );
+        }
+    }
+
+    #[test]
     fn reply_gate_off_by_default() {
         // Every existing install must be untouched: no config, no gate.
         let ch = DiscordChannel::new(
@@ -8555,7 +8692,7 @@ mod tests {
             false,
             true,
         );
-        assert_eq!(ch.reply_approval_recipient("999"), None);
+        assert_eq!(ch.reply_approval_recipient("999", "sender-99"), None);
     }
 
     #[test]
@@ -8569,7 +8706,10 @@ mod tests {
             true,
         )
         .with_reply_approval_channel_id("111".into());
-        assert_eq!(ch.reply_approval_recipient("999"), Some("111".to_string()));
+        assert_eq!(
+            ch.reply_approval_recipient("999", "sender-99"),
+            Some("111".to_string())
+        );
     }
 
     #[test]
@@ -8585,7 +8725,7 @@ mod tests {
             true,
         )
         .with_reply_approval_channel_id("111".into());
-        assert_eq!(ch.reply_approval_recipient("111"), None);
+        assert_eq!(ch.reply_approval_recipient("111", "sender-99"), None);
     }
 
     #[test]
@@ -8601,9 +8741,12 @@ mod tests {
             true,
         )
         .with_reply_approval_channel_id("111".into());
-        assert_eq!(ch.reply_approval_recipient("111:22334455"), None);
         assert_eq!(
-            ch.reply_approval_recipient("999:22334455"),
+            ch.reply_approval_recipient("111:22334455", "sender-99"),
+            None
+        );
+        assert_eq!(
+            ch.reply_approval_recipient("999:22334455", "sender-99"),
             Some("111".to_string())
         );
     }

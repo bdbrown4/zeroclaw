@@ -5489,7 +5489,8 @@ async fn process_channel_message_body(
             // point, so anything the turn DID has already happened. This holds a
             // sentence, not a turn.
             if let Some(channel) = target_channel.as_ref()
-                && let Some(approver) = channel.reply_approval_recipient(&msg.reply_target)
+                && let Some(approver) =
+                    channel.reply_approval_recipient(&msg.reply_target, &msg.sender)
             {
                 let preview: String = delivered_response.chars().take(1500).collect();
                 let req = zeroclaw_api::channel::ChannelApprovalRequest {
@@ -6412,6 +6413,7 @@ fn build_channel_by_id(
                 .with_channel_ids(dc.channel_ids.clone())
                 .with_mention_exempt_channel_ids(dc.mention_exempt_channel_ids.clone())
                 .with_mention_aliases(dc.mention_aliases.clone())
+                .with_reply_approval_exempt_senders(dc.reply_approval_exempt_senders.clone())
                 .with_reply_approval_channel_id(dc.reply_approval_channel_id.clone())
                 .with_workspace_dir(workspace_dir)
                 .with_streaming(
@@ -7518,6 +7520,7 @@ fn collect_configured_channels(
         .with_channel_ids(dc.channel_ids.clone())
         .with_mention_exempt_channel_ids(dc.mention_exempt_channel_ids.clone())
         .with_mention_aliases(dc.mention_aliases.clone())
+        .with_reply_approval_exempt_senders(dc.reply_approval_exempt_senders.clone())
         .with_reply_approval_channel_id(dc.reply_approval_channel_id.clone())
         .with_workspace_dir(config.channel_workspace_dir(&format!("discord.{alias}")))
         .with_streaming(
@@ -10195,6 +10198,7 @@ pub async fn deliver_announcement(
             .with_channel_ids(dc.channel_ids.clone())
             .with_mention_exempt_channel_ids(dc.mention_exempt_channel_ids.clone())
             .with_mention_aliases(dc.mention_aliases.clone())
+            .with_reply_approval_exempt_senders(dc.reply_approval_exempt_senders.clone())
             .with_reply_approval_channel_id(dc.reply_approval_channel_id.clone())
             .with_workspace_dir(config.channel_workspace_dir(channel));
             zeroclaw_api::channel::Channel::send(&ch, &make_msg(&safe_output)).await?;

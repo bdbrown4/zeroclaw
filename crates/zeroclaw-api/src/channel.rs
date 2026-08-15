@@ -489,8 +489,15 @@ pub trait Channel: Send + Sync + crate::attribution::Attributable {
     /// already happened. This is publication control, not containment, and it
     /// is not a substitute for restricting which tools a turn can reach.
     ///
+    /// `sender` is the channel-native identity of whoever produced the turn
+    /// being answered, so an implementation can waive the gate for people whose
+    /// replies need no vetting -- above all the operator themselves, who would
+    /// otherwise have to approve every sentence of their own conversation. It is
+    /// the transport's own author field, never anything parsed out of message
+    /// text, so message content cannot claim to be someone it is not.
+    ///
     /// Default `None` leaves every other channel exactly as it was.
-    fn reply_approval_recipient(&self, _reply_target: &str) -> Option<String> {
+    fn reply_approval_recipient(&self, _reply_target: &str, _sender: &str) -> Option<String> {
         None
     }
 
