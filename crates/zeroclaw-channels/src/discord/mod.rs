@@ -1788,6 +1788,29 @@ fn approval_prompt_destination<'a>(recipient: &'a str, approval_channel: &str) -
     (origin, redirecting)
 }
 
+/// Whether this message is a direct reply to one of the bot's own messages.
+///
+/// Discord puts the message being answered in `referenced_message`, so this is
+/// read straight off the payload rather than guessed at from the text. It is the
+/// strongest "this is for you" signal there is -- stronger than a name in prose,
+/// which is usually two people talking ABOUT the bot rather than to it.
+///
+/// Only the reply anchor counts. Forwards (`message_snapshots`) are someone
+/// handing over a copy of something the bot said, which is not the same as
+/// speaking to it, and treating those as addressed would wake it on every
+/// forward of its own output.
+fn replies_to_bot(payload: &serde_json::Value, bot_user_id: &str) -> bool {
+    if bot_user_id.is_empty() {
+        return false;
+    }
+    payload
+        .get("referenced_message")
+        .and_then(|m| m.get("author"))
+        .and_then(|a| a.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|id| id == bot_user_id)
+}
+
 /// Decide whether an inbound Discord message passes the listener gate.
 /// Returns the cleaned text body when admitted, or `None` to drop the
 /// message. Attachment-only messages (empty `content` plus at least one
@@ -3772,8 +3795,16 @@ impl Channel for DiscordChannel {
                                         .mention_exempt_channel_ids
                                         .iter()
                                         .any(|c| c == msg_channel_id);
-                                let effective_mention_only =
-                                    self.mention_only && !is_dm && !is_mention_exempt;
+                                // A direct reply to one of our own messages is addressed to
+                                // us whether or not it names us. Discord already carries the
+                                // addressing in `referenced_message`; requiring a tag on top
+                                // of that made the bot deaf to the most natural way to answer
+                                // it, which is to hit reply on what it just said.
+                                let is_reply_to_bot = replies_to_bot(d, &bot_user_id);
+                                let effective_mention_only = self.mention_only
+                                    && !is_dm
+                                    && !is_mention_exempt
+                                    && !is_reply_to_bot;
                                 let atts = d
                                     .get("attachments")
                                     .and_then(|a| a.as_array())
@@ -6631,6 +6662,47 @@ mod tests {
         assert!(admit_discord_message("unrelated chatter", false, true, "12345", &a).is_none());
         // A real @mention keeps working alongside the aliases.
         assert!(admit_discord_message("<@12345> hi", false, true, "12345", &a).is_some());
+    }
+
+    #[test]
+    fn reply_to_the_bots_own_message_counts_as_addressing_it() {
+        use serde_json::json;
+        // Someone hits reply on what the bot said and types. No tag, no name.
+        assert!(replies_to_bot(
+            &json!({"referenced_message": {"author": {"id": "12345"}}}),
+            "12345"
+        ));
+        // A reply to somebody else's message is not addressed to the bot, even
+        // though it is still a reply.
+        assert!(!replies_to_bot(
+            &json!({"referenced_message": {"author": {"id": "99999"}}}),
+            "12345"
+        ));
+        // An ordinary message.
+        assert!(!replies_to_bot(&json!({"content": "hello"}), "12345"));
+        // A forward of the bot's own output is not someone speaking TO it.
+        assert!(!replies_to_bot(
+            &json!({"message_snapshots": [{"message": {"content": "something it said"}}]}),
+            "12345"
+        ));
+        // No identity to compare against: never claim it was addressed.
+        assert!(!replies_to_bot(
+            &json!({"referenced_message": {"author": {"id": "12345"}}}),
+            ""
+        ));
+    }
+
+    #[test]
+    fn admit_gate_opens_for_a_reply_even_with_no_mention_or_name() {
+        // This is what the gate does with the flag folded in: mention_only stays
+        // on for everything else, and a bare "yeah but why" is admitted only
+        // because it was a reply to the bot.
+        let aliases = vec!["francis".to_string()];
+        assert!(admit_discord_message("yeah but why", false, true, "12345", &aliases).is_none());
+        // `effective_mention_only` is false for a reply-to-bot, which is exactly
+        // how DMs and mention-exempt channels are already handled.
+        let cleaned = admit_discord_message("yeah but why", false, false, "12345", &aliases);
+        assert_eq!(cleaned.as_deref(), Some("yeah but why"));
     }
 
     #[test]
