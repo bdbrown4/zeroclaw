@@ -1776,6 +1776,18 @@ fn inbound_context_is_foreign(payload: &serde_json::Value, author_id: &str) -> b
         .is_some_and(|id| id != author_id)
 }
 
+/// Choose where an approval prompt is posted: `(origin_channel, redirecting)`.
+///
+/// `recipient` is the channel the turn came from, carrying an optional `:thread`
+/// suffix. When an approval channel is configured and the turn did not come from
+/// it, the prompt is redirected there; `origin` is still returned so the prompt
+/// can name where it was asked.
+fn approval_prompt_destination<'a>(recipient: &'a str, approval_channel: &str) -> (&'a str, bool) {
+    let origin = recipient.split(':').next().unwrap_or(recipient);
+    let redirecting = !approval_channel.is_empty() && origin != approval_channel;
+    (origin, redirecting)
+}
+
 /// Decide whether an inbound Discord message passes the listener gate.
 /// Returns the cleaned text body when admitted, or `None` to drop the
 /// message. Attachment-only messages (empty `content` plus at least one
@@ -4533,11 +4545,23 @@ impl Channel for DiscordChannel {
         recipient: &str,
         request: &ChannelApprovalRequest,
     ) -> anyhow::Result<Option<ChannelApprovalResponse>> {
-        // Approval prompts can't be delivered over a deferred interaction
-        // reply (the sentinel is not a channel and the single @original
-        // edit is reserved for the answer). Fail fast so the agent loop's
-        // deny-by-default applies instead of a doomed REST round-trip.
-        if parse_discord_interaction_target(recipient).is_some() {
+        // Where the prompt goes. `recipient` is the channel the TURN came from,
+        // which is the wrong place to ask: for a turn a stranger provoked, that
+        // is a channel the stranger is sitting in, so they see the Allow button
+        // and — with `slash_commands` off — the token in plaintext. It is also
+        // somewhere the operator may never look, so a prompt posted there just
+        // times out into a deny.
+        //
+        // When an approval channel is configured, every prompt goes there
+        // instead. Unconfigured installs keep the old destination exactly.
+        let (origin, redirecting) =
+            approval_prompt_destination(recipient, &self.reply_approval_channel_id);
+
+        // A deferred interaction reply is not a channel: the sentinel cannot be
+        // posted to and the single @original edit is reserved for the answer. If
+        // we are redirecting there is somewhere else to ask, so this is only
+        // fatal when it is the only destination we have.
+        if !redirecting && parse_discord_interaction_target(recipient).is_some() {
             anyhow::bail!("approval prompts are not supported over interaction replies");
         }
         let token = crate::util::new_approval_token();
@@ -4549,7 +4573,21 @@ impl Channel for DiscordChannel {
             .insert(token.clone(), tx);
 
         // Strip thread suffix — approval message goes to the channel root.
-        let channel_id = recipient.split(':').next().unwrap_or(recipient);
+        let (channel_id, redirected);
+        let request = if redirecting {
+            // Name the origin. Read in isolation, "approve shell?" is unanswerable
+            // — which channel, prompted by whom — and the operator would be
+            // approving blind.
+            redirected = ChannelApprovalRequest {
+                arguments_summary: format!("asked in <#{origin}>\n\n{}", request.arguments_summary),
+                ..request.clone()
+            };
+            channel_id = self.reply_approval_channel_id.as_str();
+            &redirected
+        } else {
+            channel_id = origin;
+            request
+        };
 
         // Prefer the buttoned prompt when the interaction pipe is live: a click
         // can only be dispatched (type-3) and thus resolve the `oneshot` when
@@ -8817,6 +8855,34 @@ mod tests {
                 "{impostor} must not inherit the exemption"
             );
         }
+    }
+
+    #[test]
+    fn approval_prompts_go_to_the_operator_channel_not_the_turns_channel() {
+        // The turn's channel is where a stranger who provoked the tool call is
+        // sitting, and with slash_commands off the token is printed there.
+        let (origin, redirecting) = approval_prompt_destination("999", "111");
+        assert!(redirecting);
+        assert_eq!(
+            origin, "999",
+            "the prompt must still name where it was asked"
+        );
+        // A thread in some other channel redirects too, on its root.
+        let (origin, redirecting) = approval_prompt_destination("999:4242", "111");
+        assert!(redirecting);
+        assert_eq!(origin, "999");
+        // Already in the approval channel: nothing to redirect, thread or not.
+        assert_eq!(approval_prompt_destination("111", "111"), ("111", false));
+        assert_eq!(
+            approval_prompt_destination("111:4242", "111"),
+            ("111", false)
+        );
+        // Unconfigured: the destination is exactly what it always was.
+        assert_eq!(approval_prompt_destination("999", ""), ("999", false));
+        // An interaction sentinel is not a channel, but with somewhere else to
+        // ask it no longer has to be a hard failure.
+        let (_, redirecting) = approval_prompt_destination("discord_interaction_abc", "111");
+        assert!(redirecting);
     }
 
     #[test]
