@@ -4414,10 +4414,10 @@ async fn process_channel_message_body(
         && route.model == default_route.1
         && !ctx.query_classification.semantic_hint.is_empty()
         && !ctx.query_classification.semantic_provider.is_empty()
-        && let Some(semantic_route) = ctx
-            .model_routes
-            .iter()
-            .find(|r| r.hint.eq_ignore_ascii_case(&ctx.query_classification.semantic_hint))
+        && let Some(semantic_route) = ctx.model_routes.iter().find(|r| {
+            r.hint
+                .eq_ignore_ascii_case(&ctx.query_classification.semantic_hint)
+        })
     {
         let budget = match ctx.query_classification.semantic_timeout_ms {
             0 => 2500,
@@ -4443,7 +4443,12 @@ async fn process_channel_message_body(
             )
             .await
             .unwrap_or_else(|_| {
-                ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"timeout_ms": budget})), "semantic route classifier timed out — keeping default route");
+                ::zeroclaw_log::record!(
+                    DEBUG,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                        .with_attrs(::serde_json::json!({"timeout_ms": budget})),
+                    "semantic route classifier timed out — keeping default route"
+                );
                 Ok(false)
             }),
             Err(err) => Err(err),
@@ -4459,7 +4464,12 @@ async fn process_channel_message_body(
             }
             Ok(false) => {}
             Err(err) => {
-                ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"error": format!("{err}")})), "semantic route classifier unavailable — keeping default route");
+                ::zeroclaw_log::record!(
+                    DEBUG,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                        .with_attrs(::serde_json::json!({"error": format!("{err}")})),
+                    "semantic route classifier unavailable — keeping default route"
+                );
             }
         }
     }
@@ -4689,40 +4699,38 @@ async fn process_channel_message_body(
     // conversation aimed at the bot, which is precisely the judgement this gate
     // exists to make — so re-litigating it on the weakest model in the system
     // can only lose information.
-    let classifier_intent = if explicit_channel_address
-        || direct_message
-        || route_escalation.is_some()
-    {
-        AssistantChannelOutcome::Reply(String::new())
-    } else {
-        let (classifier_provider_arc, classifier_model_owned, classifier_temperature): (
-            Arc<dyn ModelProvider>,
-            String,
-            Option<f64>,
-        ) = resolve_classifier_route(
-            ctx.as_ref(),
-            &ctx.agent_cfg.classifier_provider,
-            &runtime_defaults,
-        )
-        .await
-        .unwrap_or_else(|| {
-            (
-                Arc::clone(&active_model_provider),
-                route.model.clone(),
-                None,
+    let classifier_intent =
+        if explicit_channel_address || direct_message || route_escalation.is_some() {
+            AssistantChannelOutcome::Reply(String::new())
+        } else {
+            let (classifier_provider_arc, classifier_model_owned, classifier_temperature): (
+                Arc<dyn ModelProvider>,
+                String,
+                Option<f64>,
+            ) = resolve_classifier_route(
+                ctx.as_ref(),
+                &ctx.agent_cfg.classifier_provider,
+                &runtime_defaults,
             )
-        });
+            .await
+            .unwrap_or_else(|| {
+                (
+                    Arc::clone(&active_model_provider),
+                    route.model.clone(),
+                    None,
+                )
+            });
 
-        classify_channel_reply_intent(
-            classifier_provider_arc.as_ref(),
-            history[0].content.as_str(),
-            &history,
-            classifier_model_owned.as_str(),
-            classifier_temperature.or(runtime_defaults.defaults.temperature),
-        )
-        .await
-        .unwrap_or(AssistantChannelOutcome::Reply(String::new()))
-    };
+            classify_channel_reply_intent(
+                classifier_provider_arc.as_ref(),
+                history[0].content.as_str(),
+                &history,
+                classifier_model_owned.as_str(),
+                classifier_temperature.or(runtime_defaults.defaults.temperature),
+            )
+            .await
+            .unwrap_or(AssistantChannelOutcome::Reply(String::new()))
+        };
 
     // ACP sessions are direct user requests — there is no broadcast,
     // no peer context, no spam concern. The no-reply classifier is a
@@ -5035,7 +5043,10 @@ async fn process_channel_message_body(
     // with the full doctrine and catalogue the small model calls unrelated tools
     // and invents markers, and its context window cannot hold the real prompt.
     // Keep the original system prompt so an escalation can restore it.
-    let full_system_prompt = history.first().map(|m| m.content.clone()).unwrap_or_default();
+    let full_system_prompt = history
+        .first()
+        .map(|m| m.content.clone())
+        .unwrap_or_default();
     let cheap_excluded_tools: Vec<String> = if route_escalation.is_some() {
         ctx.tools_registry
             .iter()
@@ -5485,7 +5496,10 @@ async fn process_channel_message_body(
                     tool_name: "reply".to_string(),
                     arguments_summary: format!(
                         "to #{} - in reply to {}\n\n{}",
-                        msg.reply_target.split(':').next().unwrap_or(&msg.reply_target),
+                        msg.reply_target
+                            .split(':')
+                            .next()
+                            .unwrap_or(&msg.reply_target),
                         msg.sender,
                         preview
                     ),
@@ -5494,7 +5508,9 @@ async fn process_channel_message_body(
                 let decision = channel.request_approval(&approver, &req).await;
                 let approved = match decision {
                     Ok(Some(zeroclaw_api::channel::ChannelApprovalResponse::Approve))
-                    | Ok(Some(zeroclaw_api::channel::ChannelApprovalResponse::AlwaysApprove)) => true,
+                    | Ok(Some(zeroclaw_api::channel::ChannelApprovalResponse::AlwaysApprove)) => {
+                        true
+                    }
                     // The operator rewrote it. Send THEIR text, not the model's.
                     Ok(Some(zeroclaw_api::channel::ChannelApprovalResponse::DenyWithEdit {
                         ref replacement,
@@ -6395,7 +6411,8 @@ fn build_channel_by_id(
                 )
                 .with_channel_ids(dc.channel_ids.clone())
                 .with_mention_exempt_channel_ids(dc.mention_exempt_channel_ids.clone())
-        .with_reply_approval_channel_id(dc.reply_approval_channel_id.clone())
+                .with_mention_aliases(dc.mention_aliases.clone())
+                .with_reply_approval_channel_id(dc.reply_approval_channel_id.clone())
                 .with_workspace_dir(workspace_dir)
                 .with_streaming(
                     dc.stream_mode,
@@ -7500,6 +7517,7 @@ fn collect_configured_channels(
         )
         .with_channel_ids(dc.channel_ids.clone())
         .with_mention_exempt_channel_ids(dc.mention_exempt_channel_ids.clone())
+        .with_mention_aliases(dc.mention_aliases.clone())
         .with_reply_approval_channel_id(dc.reply_approval_channel_id.clone())
         .with_workspace_dir(config.channel_workspace_dir(&format!("discord.{alias}")))
         .with_streaming(
@@ -10176,7 +10194,8 @@ pub async fn deliver_announcement(
             )
             .with_channel_ids(dc.channel_ids.clone())
             .with_mention_exempt_channel_ids(dc.mention_exempt_channel_ids.clone())
-        .with_reply_approval_channel_id(dc.reply_approval_channel_id.clone())
+            .with_mention_aliases(dc.mention_aliases.clone())
+            .with_reply_approval_channel_id(dc.reply_approval_channel_id.clone())
             .with_workspace_dir(config.channel_workspace_dir(channel));
             zeroclaw_api::channel::Channel::send(&ch, &make_msg(&safe_output)).await?;
         }
@@ -10431,7 +10450,10 @@ mod tests {
         );
         let out = user_facing_error(&anyhow::Error::msg(raw));
         assert!(out.contains("couldn't reach any model"), "{out}");
-        assert!(out.contains("openrouter"), "should name who was tried: {out}");
+        assert!(
+            out.contains("openrouter"),
+            "should name who was tried: {out}"
+        );
         assert!(out.contains("gemini"), "{out}");
         assert!(out.contains("ollama"), "{out}");
         // The point of the change: no wall of diagnostics in the chat window.
@@ -11169,7 +11191,9 @@ temperature = 0.3
         assert!(cheap_answer_is_inadequate(
             "I can't access real-time server stats like member count."
         ));
-        assert!(cheap_answer_is_inadequate("I'm unable to check that for you."));
+        assert!(cheap_answer_is_inadequate(
+            "I'm unable to check that for you."
+        ));
         assert!(cheap_answer_is_inadequate("As an AI, I don't have that."));
         assert!(cheap_answer_is_inadequate("   "));
         assert!(cheap_answer_is_inadequate(""));
@@ -11195,7 +11219,9 @@ temperature = 0.3
         assert!(parse_semantic_route_verdict("EASY"));
         assert!(parse_semantic_route_verdict("  easy  "));
         assert!(parse_semantic_route_verdict("`EASY`"));
-        assert!(parse_semantic_route_verdict("EASY\nbecause it is just a greeting"));
+        assert!(parse_semantic_route_verdict(
+            "EASY\nbecause it is just a greeting"
+        ));
     }
 
     #[test]

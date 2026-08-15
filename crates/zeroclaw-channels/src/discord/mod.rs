@@ -86,6 +86,9 @@ pub struct DiscordChannel {
     /// `mention_exempt_channel_ids`). Treated exactly like a DM: conversational,
     /// no @mention required — while other channels stay mention-only.
     mention_exempt_channel_ids: Vec<String>,
+    /// Names that count as addressing the bot without an `<@id>` tag (config
+    /// `mention_aliases`). Widens the `mention_only` gate; never bypasses it.
+    mention_aliases: Vec<String>,
     /// Channel id where an outbound reply must be approved before it is sent.
     /// Empty disables the gate entirely (the default, and the behaviour every
     /// existing install keeps). Replies bound FOR this channel are never gated
@@ -199,6 +202,7 @@ impl DiscordChannel {
             listen_to_bots,
             mention_only,
             mention_exempt_channel_ids: vec![],
+            mention_aliases: vec![],
             reply_approval_channel_id: String::new(),
             intents_mask_override: None,
             reaction_scope: zeroclaw_config::schema::DiscordReactionScope::Off,
@@ -364,6 +368,11 @@ impl DiscordChannel {
 
     pub fn with_mention_exempt_channel_ids(mut self, ids: Vec<String>) -> Self {
         self.mention_exempt_channel_ids = ids;
+        self
+    }
+
+    pub fn with_mention_aliases(mut self, names: Vec<String>) -> Self {
+        self.mention_aliases = names;
         self
     }
 
@@ -1389,7 +1398,14 @@ async fn process_attachments(
                 .map(|b| format!("{b:02x}"))
                 .collect::<Vec<_>>()
                 .join("");
-            ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"name": name, "bytes": bytes.len(), "magic": magic})), "downloaded audio attachment for transcription");
+            ::zeroclaw_log::record!(
+                INFO,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                    .with_attrs(
+                        ::serde_json::json!({"name": name, "bytes": bytes.len(), "magic": magic})
+                    ),
+                "downloaded audio attachment for transcription"
+            );
             match manager.transcribe(&bytes, name).await {
                 Ok(text) => {
                     let trimmed = text.trim();
@@ -1680,6 +1696,41 @@ fn contains_bot_mention(content: &str, bot_user_id: &str) -> bool {
     content.contains(&tags[0]) || content.contains(&tags[1])
 }
 
+/// Whether `content` names the bot in plain prose, per the configured aliases.
+///
+/// Word-boundary matched and case-insensitive, because the whole point is to
+/// catch people TALKING ABOUT the bot rather than tagging it -- and a substring
+/// match would catch far too much. With alias `francis`: `Francis`, `francis's`,
+/// `FRANCIS!` and `hey, francis?` all match; `franciscan`, `San Francisco` and
+/// `francis4life` do not. A boundary is anything that is not alphanumeric, so
+/// punctuation, quotes and possessives all read as ends of a word.
+///
+/// Empty aliases (the default) always returns false -- the gate is then exactly
+/// the @mention test it has always been.
+fn contains_name_alias(content: &str, aliases: &[String]) -> bool {
+    if aliases.is_empty() {
+        return false;
+    }
+    let hay = content.to_lowercase();
+    aliases.iter().any(|alias| {
+        let needle = alias.trim().to_lowercase();
+        if needle.is_empty() {
+            return false;
+        }
+        hay.match_indices(&needle).any(|(at, _)| {
+            let before_ok = hay[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_alphanumeric());
+            let after_ok = hay[at + needle.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| !c.is_alphanumeric());
+            before_ok && after_ok
+        })
+    })
+}
+
 /// Whether a Discord message `type` represents a real user turn the bot should
 /// act on, versus a system/auto message it must ignore.
 ///
@@ -1704,8 +1755,12 @@ fn admit_discord_message(
     has_attachments: bool,
     mention_only: bool,
     bot_user_id: &str,
+    mention_aliases: &[String],
 ) -> Option<String> {
-    if mention_only && !contains_bot_mention(content, bot_user_id) {
+    if mention_only
+        && !contains_bot_mention(content, bot_user_id)
+        && !contains_name_alias(content, mention_aliases)
+    {
         return None;
     }
 
@@ -1810,10 +1865,7 @@ fn quote_message_body(m: &serde_json::Value) -> String {
 fn describe_inbound_context(d: &serde_json::Value) -> String {
     let mut blocks: Vec<String> = Vec::new();
 
-    if let Some(re) = d
-        .get("referenced_message")
-        .filter(|v| v.is_object())
-    {
+    if let Some(re) = d.get("referenced_message").filter(|v| v.is_object()) {
         let body = quote_message_body(re);
         if !body.is_empty() {
             blocks.push(format!(
@@ -2029,7 +2081,14 @@ async fn discord_channel_label(
     let result = match tokio::time::timeout(THREAD_LOOKUP_TIMEOUT, lookup).await {
         Ok(Ok(value)) => value,
         Ok(Err(e)) => {
-            ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"channel_id": channel_id, "error": format!("{}", e)})), "channel label lookup failed");
+            ::zeroclaw_log::record!(
+                DEBUG,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                    .with_attrs(
+                        ::serde_json::json!({"channel_id": channel_id, "error": format!("{}", e)})
+                    ),
+                "channel label lookup failed"
+            );
             return None;
         }
         Err(_) => {
@@ -3663,6 +3722,7 @@ impl Channel for DiscordChannel {
                         has_attachments || !inbound_context.is_empty(),
                         effective_mention_only,
                         &bot_user_id,
+                        &self.mention_aliases,
                     ) else {
                         continue;
                     };
@@ -6394,20 +6454,57 @@ mod tests {
     }
 
     #[test]
+    fn name_alias_matches_on_word_boundaries_only() {
+        let a = vec!["francis".to_string()];
+        // Talking ABOUT him, no tag -- the whole point of the feature.
+        assert!(contains_name_alias("does francis know about this", &a));
+        assert!(contains_name_alias("Francis, thoughts?", &a));
+        assert!(contains_name_alias("that was FRANCIS's idea", &a));
+        assert!(contains_name_alias("francis", &a));
+        assert!(contains_name_alias("(francis)", &a));
+        // Words that merely contain the name must not wake him.
+        assert!(!contains_name_alias("a franciscan monk", &a));
+        assert!(!contains_name_alias("flying to San Francisco", &a));
+        assert!(!contains_name_alias("user francis4life joined", &a));
+        assert!(!contains_name_alias("nothing to see here", &a));
+    }
+
+    #[test]
+    fn name_alias_is_inert_when_unconfigured() {
+        // The default. Behaviour must be byte-identical to the @mention-only gate.
+        assert!(!contains_name_alias("francis francis francis", &[]));
+        assert!(!contains_name_alias("", &[]));
+        assert!(!contains_name_alias("francis", &["   ".to_string()]));
+    }
+
+    #[test]
+    fn admit_discord_message_accepts_named_bot_without_tag() {
+        let a = vec!["francis".to_string()];
+        // Named in prose: admitted even though mention_only is on...
+        let cleaned = admit_discord_message("  ask francis about it  ", false, true, "12345", &a);
+        assert_eq!(cleaned.as_deref(), Some("ask francis about it"));
+        // ...and an unrelated message is still dropped, which is why this is
+        // preferable to switching mention_only off.
+        assert!(admit_discord_message("unrelated chatter", false, true, "12345", &a).is_none());
+        // A real @mention keeps working alongside the aliases.
+        assert!(admit_discord_message("<@12345> hi", false, true, "12345", &a).is_some());
+    }
+
+    #[test]
     fn admit_discord_message_requires_mention_when_enabled() {
-        let cleaned = admit_discord_message("hello there", false, true, "12345");
+        let cleaned = admit_discord_message("hello there", false, true, "12345", &[]);
         assert!(cleaned.is_none());
     }
 
     #[test]
     fn admit_discord_message_preserves_mention_in_body() {
-        let cleaned = admit_discord_message("  <@!12345> run status  ", false, true, "12345");
+        let cleaned = admit_discord_message("  <@!12345> run status  ", false, true, "12345", &[]);
         assert_eq!(cleaned.as_deref(), Some("<@!12345> run status"));
     }
 
     #[test]
     fn admit_discord_message_admits_caption_that_is_only_the_mention() {
-        let cleaned = admit_discord_message("<@12345>", false, true, "12345");
+        let cleaned = admit_discord_message("<@12345>", false, true, "12345", &[]);
         assert_eq!(cleaned.as_deref(), Some("<@12345>"));
     }
 
@@ -6416,7 +6513,7 @@ mod tests {
         // DM (effective_mention_only=false), empty text body, at least one
         // attachment. Previously dropped at the empty-text gate; now passes
         // through so process_attachments can run on the media.
-        let cleaned = admit_discord_message("", true, false, "12345");
+        let cleaned = admit_discord_message("", true, false, "12345", &[]);
         assert_eq!(cleaned.as_deref(), Some(""));
     }
 
@@ -6426,7 +6523,7 @@ mod tests {
         // and the message has a media attachment. Mention gate passes; the
         // body keeps the mention text so downstream code (and the agent it
         // routes to) can see who was addressed.
-        let cleaned = admit_discord_message("<@12345>", true, true, "12345");
+        let cleaned = admit_discord_message("<@12345>", true, true, "12345", &[]);
         assert_eq!(cleaned.as_deref(), Some("<@12345>"));
     }
 
@@ -6435,7 +6532,7 @@ mod tests {
         // Guild channel with mention_only=true, attachment but no mention
         // anywhere in the caption. The mention gate is orthogonal to
         // attachment presence: no mention signal means drop.
-        let cleaned = admit_discord_message("", true, true, "12345");
+        let cleaned = admit_discord_message("", true, true, "12345", &[]);
         assert!(cleaned.is_none());
     }
 
@@ -6443,8 +6540,8 @@ mod tests {
     fn admit_discord_message_drops_when_no_text_and_no_attachments() {
         // Completely empty payload with attachments absent is always dropped,
         // regardless of mention_only setting.
-        assert!(admit_discord_message("", false, false, "12345").is_none());
-        assert!(admit_discord_message("", false, true, "12345").is_none());
+        assert!(admit_discord_message("", false, false, "12345", &[]).is_none());
+        assert!(admit_discord_message("", false, true, "12345", &[]).is_none());
     }
 
     // Inbound quoted-context tests. The forward payload below is a verbatim
@@ -6498,9 +6595,9 @@ mod tests {
         // it silently and the agent never learned anything was sent.
         let ctx = describe_inbound_context(&forwarded_message_fixture());
         assert!(!ctx.is_empty());
-        assert!(admit_discord_message("", false, false, "12345").is_none());
+        assert!(admit_discord_message("", false, false, "12345", &[]).is_none());
         assert!(
-            admit_discord_message("", !ctx.is_empty(), false, "12345").is_some(),
+            admit_discord_message("", !ctx.is_empty(), false, "12345", &[]).is_some(),
             "a forward must count as payload at the admit gate"
         );
     }
@@ -6510,7 +6607,7 @@ mod tests {
         // Widening what counts as *content* must not widen who may address the
         // bot: an unmentioned forward in a mention-only channel still drops.
         let ctx = describe_inbound_context(&forwarded_message_fixture());
-        assert!(admit_discord_message("", !ctx.is_empty(), true, "12345").is_none());
+        assert!(admit_discord_message("", !ctx.is_empty(), true, "12345", &[]).is_none());
     }
 
     #[test]
@@ -6553,15 +6650,15 @@ mod tests {
         assert_eq!(loc, "[channel: #football (400000000000000001)]");
         // The id must survive even when the name lookup failed, since the id is
         // the part read_channel actually needs.
-        assert_eq!(
-            describe_location(false, "123", None),
-            "[channel: 123]"
-        );
+        assert_eq!(describe_location(false, "123", None), "[channel: 123]");
     }
 
     #[test]
     fn location_marker_handles_dms_and_missing_ids() {
-        assert_eq!(describe_location(true, "555", None), "[channel: direct message]");
+        assert_eq!(
+            describe_location(true, "555", None),
+            "[channel: direct message]"
+        );
         assert_eq!(describe_location(false, "", Some("x")), "");
     }
 
@@ -6569,7 +6666,10 @@ mod tests {
     fn location_marker_leaves_approval_replies_parsable() {
         // Appended after the approval intercept, but assert the combined shape
         // parses anyway — a regression here would silently break confirmations.
-        let combined = format!("abc123 approve\n\n{}", describe_location(false, "42", Some("g")));
+        let combined = format!(
+            "abc123 approve\n\n{}",
+            describe_location(false, "42", Some("g"))
+        );
         assert!(crate::util::parse_approval_reply(&combined).is_some());
     }
 
@@ -6588,7 +6688,10 @@ mod tests {
             "message_snapshots": [{ "message": { "content": long, "attachments": [], "embeds": [] } }]
         });
         let ctx = describe_inbound_context(&d);
-        assert!(ctx.contains("[truncated]"), "long forward should be truncated");
+        assert!(
+            ctx.contains("[truncated]"),
+            "long forward should be truncated"
+        );
         assert!(ctx.chars().count() < MAX_QUOTED_CONTEXT_CHARS + 200);
     }
 
@@ -6614,7 +6717,8 @@ mod tests {
         let mention_only = true;
         let is_dm = true;
         let effective = mention_only && !is_dm;
-        let cleaned = admit_discord_message("hello without mention", false, effective, "12345");
+        let cleaned =
+            admit_discord_message("hello without mention", false, effective, "12345", &[]);
         assert_eq!(cleaned.as_deref(), Some("hello without mention"));
     }
 
@@ -6625,7 +6729,8 @@ mod tests {
         let mention_only = true;
         let is_dm = false;
         let effective = mention_only && !is_dm;
-        let cleaned = admit_discord_message("hello without mention", false, effective, "12345");
+        let cleaned =
+            admit_discord_message("hello without mention", false, effective, "12345", &[]);
         assert!(cleaned.is_none());
     }
 
@@ -6637,7 +6742,7 @@ mod tests {
         let mention_only = true;
         let is_dm = false;
         let effective = mention_only && !is_dm;
-        let cleaned = admit_discord_message("<@12345> run status", false, effective, "12345");
+        let cleaned = admit_discord_message("<@12345> run status", false, effective, "12345", &[]);
         assert_eq!(cleaned.as_deref(), Some("<@12345> run status"));
     }
 
@@ -8463,7 +8568,7 @@ mod tests {
             false,
             true,
         )
-            .with_reply_approval_channel_id("111".into());
+        .with_reply_approval_channel_id("111".into());
         assert_eq!(ch.reply_approval_recipient("999"), Some("111".to_string()));
     }
 
@@ -8479,7 +8584,7 @@ mod tests {
             false,
             true,
         )
-            .with_reply_approval_channel_id("111".into());
+        .with_reply_approval_channel_id("111".into());
         assert_eq!(ch.reply_approval_recipient("111"), None);
     }
 
@@ -8495,7 +8600,7 @@ mod tests {
             false,
             true,
         )
-            .with_reply_approval_channel_id("111".into());
+        .with_reply_approval_channel_id("111".into());
         assert_eq!(ch.reply_approval_recipient("111:22334455"), None);
         assert_eq!(
             ch.reply_approval_recipient("999:22334455"),

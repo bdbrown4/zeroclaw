@@ -466,7 +466,9 @@ mod tests {
     /// Windows), so the segment must be matched separator-agnostically
     /// rather than by a hardcoded POSIX `/uploads/` substring.
     fn marker_has_uploads_segment(marker: &str) -> bool {
-        marker.split(['/', '\\']).any(|segment| segment == "uploads")
+        marker
+            .split(['/', '\\'])
+            .any(|segment| segment == "uploads")
     }
 
     #[tokio::test]

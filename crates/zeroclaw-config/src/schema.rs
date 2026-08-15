@@ -12471,6 +12471,20 @@ pub struct DiscordConfig {
     #[tab(Behavior)]
     #[serde(default)]
     pub mention_exempt_channel_ids: Vec<String>,
+    /// Names that count as addressing the bot even without an `<@id>` tag, so it
+    /// hears "ask francis" the same as "ask @Francis". Matched case-insensitively
+    /// on word boundaries: "francis" matches `Francis`, `francis's` and `FRANCIS!`
+    /// but not `franciscan` or `San Francisco`.
+    ///
+    /// This WIDENS `mention_only`, it does not disable it: every other message is
+    /// still dropped. Prefer it over `mention_only = false`, which wakes a turn --
+    /// and spends a model call -- on literally every message in every channel.
+    ///
+    /// Empty (default) = only real @mentions count, exactly as before. No effect
+    /// when `mention_only = false`, which already admits everything.
+    #[tab(Behavior)]
+    #[serde(default)]
+    pub mention_aliases: Vec<String>,
     /// Channel id where an outbound reply must be approved before it is sent.
     ///
     /// Empty (default) disables the gate; every existing install is unaffected.
