@@ -1923,6 +1923,7 @@ mod inbound {
             interruption_scope_from_anchor(outbound_anchor.as_deref(), &ev.event_id);
 
         let msg = ChannelMessage {
+            carries_foreign_content: false,
             id: ev.event_id.to_string(),
             sender: sender.to_string(),
             reply_target: room.room_id().to_string(),

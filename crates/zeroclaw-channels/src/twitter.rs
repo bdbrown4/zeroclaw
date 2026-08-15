@@ -333,6 +333,7 @@ impl Channel for TwitterChannel {
                             let reply_target = format!("tweet:{tweet_id}");
 
                             let channel_msg = ChannelMessage {
+                                carries_foreign_content: false,
                                 id: Uuid::new_v4().to_string(),
                                 sender: username,
                                 reply_target,

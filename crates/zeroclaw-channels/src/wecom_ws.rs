@@ -678,6 +678,7 @@ impl WeComWsChannel {
             );
             let _ = tx
                 .send(ChannelMessage {
+                    carries_foreign_content: false,
                     channel_alias: Some(self.alias.clone()),
                     thread_ts: Some(req_id),
                     ..ChannelMessage::new(
@@ -702,6 +703,7 @@ impl WeComWsChannel {
                 .await;
             let _ = tx
                 .send(ChannelMessage {
+                    carries_foreign_content: false,
                     channel_alias: Some(self.alias.clone()),
                     ..ChannelMessage::new(
                         parsed.msg_id.clone(),
@@ -725,6 +727,7 @@ impl WeComWsChannel {
             );
             let _ = tx
                 .send(ChannelMessage {
+                    carries_foreign_content: false,
                     channel_alias: Some(self.alias.clone()),
                     thread_ts: Some(req_id),
                     ..ChannelMessage::new(
@@ -809,6 +812,7 @@ impl WeComWsChannel {
 
             let _ = tx
                 .send(ChannelMessage {
+                    carries_foreign_content: false,
                     channel_alias: Some(channel_self.alias.clone()),
                     thread_ts: Some(req_id),
                     ..ChannelMessage::new(

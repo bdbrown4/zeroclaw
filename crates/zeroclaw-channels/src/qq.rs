@@ -1456,272 +1456,274 @@ impl Channel for QQChannel {
 
         'outer: loop {
             tokio::select! {
-                _ = hb_rx.recv() => {
-                    // Increment the missed-ACK counter.  Only declare the
-                    // connection dead after MAX_MISSED_ACKS consecutive
-                    // heartbeats go un-acknowledged.
-                    if missed_ack_count > 0 {
-                        if missed_ack_count >= MAX_MISSED_ACKS {
-                            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"missed_ack_count": missed_ack_count, "hb_interval": hb_interval, "grace_ms": grace_ms})), "consecutive heartbeat ACKs missed (interval ms + ms grace); connection appears zombied");
-                            exit_reason = ExitReason::HeartbeatTimeout;
-                            break;
+                            _ = hb_rx.recv() => {
+                                // Increment the missed-ACK counter.  Only declare the
+                                // connection dead after MAX_MISSED_ACKS consecutive
+                                // heartbeats go un-acknowledged.
+                                if missed_ack_count > 0 {
+                                    if missed_ack_count >= MAX_MISSED_ACKS {
+                                        ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"missed_ack_count": missed_ack_count, "hb_interval": hb_interval, "grace_ms": grace_ms})), "consecutive heartbeat ACKs missed (interval ms + ms grace); connection appears zombied");
+                                        exit_reason = ExitReason::HeartbeatTimeout;
+                                        break;
+                                    }
+                                    ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"missed_ack_count": missed_ack_count, "MAX_MISSED_ACKS": MAX_MISSED_ACKS})), "heartbeat ACK missed (/); tolerating transient delay");
+                                }
+                                let d = if sequence >= 0 { json!(sequence) } else { json!(null) };
+                                let hb = json!({"op": 1, "d": d});
+                                if write
+                                    .send(Message::Text(hb.to_string().into()))
+                                    .await
+                                    .is_err()
+                                {
+                                    exit_reason = ExitReason::WriteFailed;
+                                    break;
+                                }
+                                missed_ack_count += 1;
+                            }
+                            msg = read.next() => {
+                                let msg = match msg {
+                                    Some(Ok(Message::Text(t))) => t,
+                                    Some(Ok(Message::Ping(payload))) => {
+                                        if write.send(Message::Pong(payload)).await.is_err() {
+                                            exit_reason = ExitReason::WriteFailed;
+                                            break;
+                                        }
+                                        continue;
+                                    }
+                                    Some(Ok(Message::Close(frame))) => {
+                                        exit_reason = ExitReason::Close(frame);
+                                        break;
+                                    }
+                                    None => {
+                                        exit_reason = ExitReason::StreamEnded;
+                                        break;
+                                    }
+                                    _ => continue,
+                                };
+
+                                let event: serde_json::Value = match serde_json::from_str(msg.as_ref()) {
+                                    Ok(e) => e,
+                                    Err(_) => continue,
+                                };
+
+                                // Track sequence number
+                                if let Some(s) = event.get("s").and_then(serde_json::Value::as_i64) {
+                                    sequence = s;
+                                    self.record_gateway_sequence(s).await;
+                                }
+
+                                let op = event.get("op").and_then(serde_json::Value::as_u64).unwrap_or(0);
+
+                                match op {
+                                    // Server requests immediate heartbeat
+                                    1 => {
+                                        let d = if sequence >= 0 { json!(sequence) } else { json!(null) };
+                                        let hb = json!({"op": 1, "d": d});
+                                        if write
+                                            .send(Message::Text(hb.to_string().into()))
+                                            .await
+                                            .is_err()
+                                        {
+                                            exit_reason = ExitReason::WriteFailed;
+                                            break;
+                                        }
+                                        missed_ack_count += 1;
+                                        continue;
+                                    }
+                                    // Reconnect
+                                    7 => {
+                                        ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown), "received Reconnect (op 7); will resume");
+                                        exit_reason = ExitReason::Reconnect;
+                                        break;
+                                    }
+                                    // Invalid Session
+                                    9 => {
+                                        ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown), "received Invalid Session (op 9); clearing session for fresh auth");
+                                        exit_reason = ExitReason::InvalidSession;
+                                        break;
+                                    }
+                                    // Heartbeat ACK
+                                    11 => {
+                                        missed_ack_count = 0;
+                                        continue;
+                                    }
+                                    _ => {}
+                                }
+
+                                // Only process dispatch events (op 0)
+                                if op != 0 {
+                                    continue;
+                                }
+
+                                let event_type = event.get("t").and_then(|t| t.as_str()).unwrap_or("");
+                                let d = match event.get("d") {
+                                    Some(d) => d,
+                                    None => continue,
+                                };
+
+                                // Capture session_id from READY event for future resume
+                                if event_type == "READY" || event_type == "RESUMED" {
+                                    if let Some(sid) = d.get("session_id").and_then(|s| s.as_str()) {
+                                        *self.session_id.write().await = Some(sid.to_string());
+                                        ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"sid": sid, "event_type": event_type})), "session established (session_id=, event=)");
+                                    }
+                                    continue;
+                                }
+
+                                ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"event_type": event_type, "d": d})), "event_type= payload=");
+
+                                match event_type {
+                                    "C2C_MESSAGE_CREATE" => {
+                                        let msg_id = d.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                                        if self.is_duplicate(msg_id).await {
+                                            continue;
+                                        }
+
+                                        let author_id = d.get("author").and_then(|a| a.get("id")).and_then(|i| i.as_str()).unwrap_or("unknown");
+                                        // For QQ, user_openid is the identifier
+                                        let user_openid = d.get("author").and_then(|a| a.get("user_openid")).and_then(|u| u.as_str()).unwrap_or(author_id);
+
+                                        if !self.is_user_allowed(user_openid) {
+                                            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"user_openid": user_openid})), "ignoring C2C message from unauthorized user");
+                                            continue;
+                                        }
+
+                                        let chat_id = format!("user:{user_openid}");
+                                        let platform_voice_dedup_parts = Self::platform_voice_dedup_parts(d);
+                                        if self
+                                            .is_duplicate_voice_redelivery(
+                                                event_type,
+                                                &chat_id,
+                                                user_openid,
+                                                &platform_voice_dedup_parts,
+                                            )
+                                            .await
+                                        {
+                                            continue;
+                                        }
+
+                                        let Some(composed) = self.compose_qq_message(d).await else {
+                                            continue;
+                                        };
+                                        let fallback_voice_dedup_parts: Vec<QQVoiceDedupPart> = composed
+                                            .voice_dedup_parts
+                                            .iter()
+                                            .filter(|part| !platform_voice_dedup_parts.contains(part))
+                                            .cloned()
+                                            .collect();
+                                        if self
+                                            .is_duplicate_voice_redelivery(
+                                                event_type,
+                                                &chat_id,
+                                                user_openid,
+                                                &fallback_voice_dedup_parts,
+                                            )
+                                            .await
+                                        {
+                                            continue;
+                                        }
+
+                                        let channel_msg = ChannelMessage {
+            carries_foreign_content: false,
+                                            id: Uuid::new_v4().to_string(),
+                                            sender: user_openid.to_string(),
+                                            reply_target: chat_id,
+                                            content: composed.content,
+                                            channel: "qq".to_string(),
+                            channel_alias: Some(self.alias.clone()),
+                                            timestamp: std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs(),
+                                            thread_ts: None,
+                                            interruption_scope_id: None,
+                                attachments: vec![],
+                                            subject: None,
+                                        };
+
+                                        if tx.send(channel_msg).await.is_err() {
+                                            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown), "message channel closed");
+                                            exit_reason = ExitReason::ChannelClosed;
+                                            break 'outer;
+                                        }
+                                    }
+                                    "GROUP_AT_MESSAGE_CREATE" => {
+                                        let msg_id = d.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                                        if self.is_duplicate(msg_id).await {
+                                            continue;
+                                        }
+
+                                        let author_id = d.get("author").and_then(|a| a.get("member_openid")).and_then(|m| m.as_str()).unwrap_or("unknown");
+
+                                        if !self.is_user_allowed(author_id) {
+                                            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"author_id": author_id})), "ignoring group message from unauthorized user");
+                                            continue;
+                                        }
+
+                                        let group_openid = d.get("group_openid").and_then(|g| g.as_str()).unwrap_or("unknown");
+                                        let chat_id = format!("group:{group_openid}");
+                                        let platform_voice_dedup_parts = Self::platform_voice_dedup_parts(d);
+                                        if self
+                                            .is_duplicate_voice_redelivery(
+                                                event_type,
+                                                &chat_id,
+                                                author_id,
+                                                &platform_voice_dedup_parts,
+                                            )
+                                            .await
+                                        {
+                                            continue;
+                                        }
+
+                                        let Some(composed) = self.compose_qq_message(d).await else {
+                                            continue;
+                                        };
+                                        let fallback_voice_dedup_parts: Vec<QQVoiceDedupPart> = composed
+                                            .voice_dedup_parts
+                                            .iter()
+                                            .filter(|part| !platform_voice_dedup_parts.contains(part))
+                                            .cloned()
+                                            .collect();
+                                        if self
+                                            .is_duplicate_voice_redelivery(
+                                                event_type,
+                                                &chat_id,
+                                                author_id,
+                                                &fallback_voice_dedup_parts,
+                                            )
+                                            .await
+                                        {
+                                            continue;
+                                        }
+
+                                        let channel_msg = ChannelMessage {
+            carries_foreign_content: false,
+                                            id: Uuid::new_v4().to_string(),
+                                            sender: author_id.to_string(),
+                                            reply_target: chat_id,
+                                            content: composed.content,
+                                            channel: "qq".to_string(),
+                            channel_alias: Some(self.alias.clone()),
+                                            timestamp: std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs(),
+                                            thread_ts: None,
+                                            interruption_scope_id: None,
+                                attachments: vec![],
+                                            subject: None,
+                                        };
+
+                                        if tx.send(channel_msg).await.is_err() {
+                                            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown), "message channel closed");
+                                            exit_reason = ExitReason::ChannelClosed;
+                                            break 'outer;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
                         }
-                        ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"missed_ack_count": missed_ack_count, "MAX_MISSED_ACKS": MAX_MISSED_ACKS})), "heartbeat ACK missed (/); tolerating transient delay");
-                    }
-                    let d = if sequence >= 0 { json!(sequence) } else { json!(null) };
-                    let hb = json!({"op": 1, "d": d});
-                    if write
-                        .send(Message::Text(hb.to_string().into()))
-                        .await
-                        .is_err()
-                    {
-                        exit_reason = ExitReason::WriteFailed;
-                        break;
-                    }
-                    missed_ack_count += 1;
-                }
-                msg = read.next() => {
-                    let msg = match msg {
-                        Some(Ok(Message::Text(t))) => t,
-                        Some(Ok(Message::Ping(payload))) => {
-                            if write.send(Message::Pong(payload)).await.is_err() {
-                                exit_reason = ExitReason::WriteFailed;
-                                break;
-                            }
-                            continue;
-                        }
-                        Some(Ok(Message::Close(frame))) => {
-                            exit_reason = ExitReason::Close(frame);
-                            break;
-                        }
-                        None => {
-                            exit_reason = ExitReason::StreamEnded;
-                            break;
-                        }
-                        _ => continue,
-                    };
-
-                    let event: serde_json::Value = match serde_json::from_str(msg.as_ref()) {
-                        Ok(e) => e,
-                        Err(_) => continue,
-                    };
-
-                    // Track sequence number
-                    if let Some(s) = event.get("s").and_then(serde_json::Value::as_i64) {
-                        sequence = s;
-                        self.record_gateway_sequence(s).await;
-                    }
-
-                    let op = event.get("op").and_then(serde_json::Value::as_u64).unwrap_or(0);
-
-                    match op {
-                        // Server requests immediate heartbeat
-                        1 => {
-                            let d = if sequence >= 0 { json!(sequence) } else { json!(null) };
-                            let hb = json!({"op": 1, "d": d});
-                            if write
-                                .send(Message::Text(hb.to_string().into()))
-                                .await
-                                .is_err()
-                            {
-                                exit_reason = ExitReason::WriteFailed;
-                                break;
-                            }
-                            missed_ack_count += 1;
-                            continue;
-                        }
-                        // Reconnect
-                        7 => {
-                            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown), "received Reconnect (op 7); will resume");
-                            exit_reason = ExitReason::Reconnect;
-                            break;
-                        }
-                        // Invalid Session
-                        9 => {
-                            ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown), "received Invalid Session (op 9); clearing session for fresh auth");
-                            exit_reason = ExitReason::InvalidSession;
-                            break;
-                        }
-                        // Heartbeat ACK
-                        11 => {
-                            missed_ack_count = 0;
-                            continue;
-                        }
-                        _ => {}
-                    }
-
-                    // Only process dispatch events (op 0)
-                    if op != 0 {
-                        continue;
-                    }
-
-                    let event_type = event.get("t").and_then(|t| t.as_str()).unwrap_or("");
-                    let d = match event.get("d") {
-                        Some(d) => d,
-                        None => continue,
-                    };
-
-                    // Capture session_id from READY event for future resume
-                    if event_type == "READY" || event_type == "RESUMED" {
-                        if let Some(sid) = d.get("session_id").and_then(|s| s.as_str()) {
-                            *self.session_id.write().await = Some(sid.to_string());
-                            ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"sid": sid, "event_type": event_type})), "session established (session_id=, event=)");
-                        }
-                        continue;
-                    }
-
-                    ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"event_type": event_type, "d": d})), "event_type= payload=");
-
-                    match event_type {
-                        "C2C_MESSAGE_CREATE" => {
-                            let msg_id = d.get("id").and_then(|i| i.as_str()).unwrap_or("");
-                            if self.is_duplicate(msg_id).await {
-                                continue;
-                            }
-
-                            let author_id = d.get("author").and_then(|a| a.get("id")).and_then(|i| i.as_str()).unwrap_or("unknown");
-                            // For QQ, user_openid is the identifier
-                            let user_openid = d.get("author").and_then(|a| a.get("user_openid")).and_then(|u| u.as_str()).unwrap_or(author_id);
-
-                            if !self.is_user_allowed(user_openid) {
-                                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"user_openid": user_openid})), "ignoring C2C message from unauthorized user");
-                                continue;
-                            }
-
-                            let chat_id = format!("user:{user_openid}");
-                            let platform_voice_dedup_parts = Self::platform_voice_dedup_parts(d);
-                            if self
-                                .is_duplicate_voice_redelivery(
-                                    event_type,
-                                    &chat_id,
-                                    user_openid,
-                                    &platform_voice_dedup_parts,
-                                )
-                                .await
-                            {
-                                continue;
-                            }
-
-                            let Some(composed) = self.compose_qq_message(d).await else {
-                                continue;
-                            };
-                            let fallback_voice_dedup_parts: Vec<QQVoiceDedupPart> = composed
-                                .voice_dedup_parts
-                                .iter()
-                                .filter(|part| !platform_voice_dedup_parts.contains(part))
-                                .cloned()
-                                .collect();
-                            if self
-                                .is_duplicate_voice_redelivery(
-                                    event_type,
-                                    &chat_id,
-                                    user_openid,
-                                    &fallback_voice_dedup_parts,
-                                )
-                                .await
-                            {
-                                continue;
-                            }
-
-                            let channel_msg = ChannelMessage {
-                                id: Uuid::new_v4().to_string(),
-                                sender: user_openid.to_string(),
-                                reply_target: chat_id,
-                                content: composed.content,
-                                channel: "qq".to_string(),
-                channel_alias: Some(self.alias.clone()),
-                                timestamp: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs(),
-                                thread_ts: None,
-                                interruption_scope_id: None,
-                    attachments: vec![],
-                                subject: None,
-                            };
-
-                            if tx.send(channel_msg).await.is_err() {
-                                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown), "message channel closed");
-                                exit_reason = ExitReason::ChannelClosed;
-                                break 'outer;
-                            }
-                        }
-                        "GROUP_AT_MESSAGE_CREATE" => {
-                            let msg_id = d.get("id").and_then(|i| i.as_str()).unwrap_or("");
-                            if self.is_duplicate(msg_id).await {
-                                continue;
-                            }
-
-                            let author_id = d.get("author").and_then(|a| a.get("member_openid")).and_then(|m| m.as_str()).unwrap_or("unknown");
-
-                            if !self.is_user_allowed(author_id) {
-                                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"author_id": author_id})), "ignoring group message from unauthorized user");
-                                continue;
-                            }
-
-                            let group_openid = d.get("group_openid").and_then(|g| g.as_str()).unwrap_or("unknown");
-                            let chat_id = format!("group:{group_openid}");
-                            let platform_voice_dedup_parts = Self::platform_voice_dedup_parts(d);
-                            if self
-                                .is_duplicate_voice_redelivery(
-                                    event_type,
-                                    &chat_id,
-                                    author_id,
-                                    &platform_voice_dedup_parts,
-                                )
-                                .await
-                            {
-                                continue;
-                            }
-
-                            let Some(composed) = self.compose_qq_message(d).await else {
-                                continue;
-                            };
-                            let fallback_voice_dedup_parts: Vec<QQVoiceDedupPart> = composed
-                                .voice_dedup_parts
-                                .iter()
-                                .filter(|part| !platform_voice_dedup_parts.contains(part))
-                                .cloned()
-                                .collect();
-                            if self
-                                .is_duplicate_voice_redelivery(
-                                    event_type,
-                                    &chat_id,
-                                    author_id,
-                                    &fallback_voice_dedup_parts,
-                                )
-                                .await
-                            {
-                                continue;
-                            }
-
-                            let channel_msg = ChannelMessage {
-                                id: Uuid::new_v4().to_string(),
-                                sender: author_id.to_string(),
-                                reply_target: chat_id,
-                                content: composed.content,
-                                channel: "qq".to_string(),
-                channel_alias: Some(self.alias.clone()),
-                                timestamp: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs(),
-                                thread_ts: None,
-                                interruption_scope_id: None,
-                    attachments: vec![],
-                                subject: None,
-                            };
-
-                            if tx.send(channel_msg).await.is_err() {
-                                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown), "message channel closed");
-                                exit_reason = ExitReason::ChannelClosed;
-                                break 'outer;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
         }
 
         // Persist sequence number for potential resume on next reconnect

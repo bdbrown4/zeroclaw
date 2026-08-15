@@ -12463,7 +12463,7 @@ pub struct DiscordConfig {
     #[tab(Behavior)]
     #[serde(default)]
     pub mention_only: bool,
-    /// Channel IDs where the `mention_only` gate does NOT apply — the bot replies
+    /// Channel IDs where the `mention_only` gate does NOT apply: the bot replies
     /// to every message there, exactly as it already does in a DM. Lets one bot be
     /// conversational in a private channel while staying mention-only everywhere
     /// else. Empty (default) = `mention_only` applies uniformly. No effect when
@@ -12510,7 +12510,7 @@ pub struct DiscordConfig {
     /// edit the text before releasing it. Replies to this channel itself are
     /// never gated, or the prompt would need approving.
     ///
-    /// The agent's own judgement about WHETHER to reply is untouched — this
+    /// The agent's own judgement about WHETHER to reply is untouched; this
     /// only decides whether the finished text is published. Note the scope: the
     /// tool loop has already run by the time a reply exists, so this holds a
     /// sentence, not a turn, and is not a substitute for limiting which tools a

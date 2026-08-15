@@ -52,6 +52,7 @@ impl Channel for CliChannel {
             }
 
             let msg = ChannelMessage {
+                carries_foreign_content: false,
                 id: Uuid::new_v4().to_string(),
                 sender: "user".to_string(),
                 reply_target: "user".to_string(),
@@ -128,6 +129,7 @@ mod tests {
     #[test]
     fn channel_message_struct() {
         let msg = ChannelMessage {
+            carries_foreign_content: false,
             id: "test-id".into(),
             sender: "user".into(),
             reply_target: "user".into(),
@@ -151,6 +153,7 @@ mod tests {
     #[test]
     fn channel_message_clone() {
         let msg = ChannelMessage {
+            carries_foreign_content: false,
             id: "id".into(),
             sender: "s".into(),
             reply_target: "s".into(),

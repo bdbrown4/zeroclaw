@@ -308,6 +308,7 @@ impl Channel for VoiceWakeChannel {
                                         .as_secs();
 
                                     let msg = ChannelMessage {
+                                        carries_foreign_content: false,
                                         id: format!("voice_wake_{msg_counter}"),
                                         sender: "voice_user".into(),
                                         reply_target: "voice_user".into(),

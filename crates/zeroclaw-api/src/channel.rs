@@ -61,6 +61,15 @@ pub struct ChannelMessage {
     /// Channels populate this when they receive media alongside a text message.
     /// Defaults to empty — existing channels are unaffected.
     pub attachments: Vec<MediaAttachment>,
+    /// True when this turn's text includes words authored by someone other than
+    /// `sender` — a quoted reply, a forward, an inlined snapshot.
+    ///
+    /// `sender` answers "whose turn is this", which is not the same question as
+    /// "whose words are these". Anything that trusts a turn because of who sent
+    /// it must consult this too, or a trusted sender becomes a carrier for
+    /// untrusted content. Defaults to `false`; a channel that inlines third-party
+    /// text is responsible for setting it.
+    pub carries_foreign_content: bool,
     /// Email subject for reply threading.
     pub subject: Option<String>,
 }
@@ -497,7 +506,17 @@ pub trait Channel: Send + Sync + crate::attribution::Attributable {
     /// text, so message content cannot claim to be someone it is not.
     ///
     /// Default `None` leaves every other channel exactly as it was.
-    fn reply_approval_recipient(&self, _reply_target: &str, _sender: &str) -> Option<String> {
+    /// `carries_foreign_content` is the message's provenance bit. An
+    /// implementation that waives the gate for a trusted `sender` MUST refuse to
+    /// waive it when this is set, or the trusted sender becomes a delivery
+    /// vehicle: quote-reply a stranger's message and their words ride into a turn
+    /// that publishes without review.
+    fn reply_approval_recipient(
+        &self,
+        _reply_target: &str,
+        _sender: &str,
+        _carries_foreign_content: bool,
+    ) -> Option<String> {
         None
     }
 
@@ -603,6 +622,7 @@ mod tests {
     #[test]
     fn send_message_reply_to_sets_threading_fields() {
         let inbound = ChannelMessage {
+            carries_foreign_content: false,
             id: "msg-001".into(),
             reply_target: "user@example.com".into(),
             thread_ts: Some("thread-1".into()),
@@ -620,6 +640,7 @@ mod tests {
     #[test]
     fn send_message_reply_to_does_not_double_re_prefix() {
         let inbound = ChannelMessage {
+            carries_foreign_content: false,
             subject: Some("Re: Already prefixed".into()),
             ..ChannelMessage::new("msg-002", "alice", "user@example.com", "", "email", 0)
         };

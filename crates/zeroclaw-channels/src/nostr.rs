@@ -307,6 +307,7 @@ impl Channel for NostrChannel {
 
                     if let Some((id, sender_hex, content, timestamp)) = result {
                         let msg = ChannelMessage {
+                            carries_foreign_content: false,
                             id,
                             sender: sender_hex.clone(),
                             reply_target: sender_hex,

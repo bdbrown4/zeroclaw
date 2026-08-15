@@ -18,6 +18,7 @@ use zeroclaw::channels::{Channel, ChannelMessage, SendMessage};
 fn channel_message_sender_field_holds_platform_user_id() {
     // Simulates Telegram: sender should be numeric chat_id, not username
     let msg = ChannelMessage {
+        carries_foreign_content: false,
         id: "msg_1".into(),
         sender: "123456789".into(), // numeric chat_id
         reply_target: "msg_0".into(),
@@ -44,6 +45,7 @@ fn channel_message_sender_field_holds_platform_user_id() {
 fn channel_message_reply_target_distinct_from_sender() {
     // Simulates Discord: reply_target should be channel_id, not sender user_id
     let msg = ChannelMessage {
+        carries_foreign_content: false,
         id: "msg_1".into(),
         sender: "user_987654".into(),       // Discord user ID
         reply_target: "channel_123".into(), // Discord channel ID for replies
@@ -68,6 +70,7 @@ fn channel_message_reply_target_distinct_from_sender() {
 fn channel_message_fields_not_swapped() {
     // Guards against #496 (Telegram) and #483 (Discord) field swap bugs
     let msg = ChannelMessage {
+        carries_foreign_content: false,
         id: "msg_42".into(),
         sender: "sender_value".into(),
         reply_target: "target_value".into(),
@@ -98,6 +101,7 @@ fn channel_message_fields_not_swapped() {
 #[test]
 fn channel_message_preserves_all_fields_on_clone() {
     let original = ChannelMessage {
+        carries_foreign_content: false,
         id: "clone_test".into(),
         sender: "sender_123".into(),
         reply_target: "target_456".into(),
@@ -206,6 +210,7 @@ impl Channel for CapturingChannel {
 
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         tx.send(ChannelMessage {
+            carries_foreign_content: false,
             id: "listen_1".into(),
             sender: "test_sender".into(),
             reply_target: "test_target".into(),

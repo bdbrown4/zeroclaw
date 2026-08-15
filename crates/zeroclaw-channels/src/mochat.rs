@@ -230,6 +230,7 @@ impl Channel for MochatChannel {
                             }
 
                             let channel_msg = ChannelMessage {
+                                carries_foreign_content: false,
                                 id: Uuid::new_v4().to_string(),
                                 sender: sender.to_string(),
                                 reply_target: sender.to_string(),

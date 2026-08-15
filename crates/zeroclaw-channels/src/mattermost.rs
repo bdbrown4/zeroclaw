@@ -982,6 +982,7 @@ impl MattermostChannel {
         };
 
         Some(ChannelMessage {
+            carries_foreign_content: false,
             id: format!("mattermost_{id}"),
             sender: user_id.to_string(),
             reply_target,

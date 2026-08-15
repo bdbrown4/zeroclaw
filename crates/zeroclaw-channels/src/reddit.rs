@@ -238,6 +238,7 @@ impl RedditChannel {
         let timestamp = item.created_utc.unwrap_or(0.0) as u64;
 
         Some(ChannelMessage {
+            carries_foreign_content: false,
             id: format!("reddit_{name}"),
             sender: author.to_string(),
             reply_target,

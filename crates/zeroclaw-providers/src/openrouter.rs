@@ -2025,7 +2025,10 @@ mod tests {
         // Usage accounting is now requested unconditionally: OpenRouter omits
         // its `cost` field without it, and that figure is the only reliable
         // price for a router alias. Everything else must be untouched.
-        assert_eq!(merged.get("usage"), Some(&serde_json::json!({"include": true})));
+        assert_eq!(
+            merged.get("usage"),
+            Some(&serde_json::json!({"include": true}))
+        );
         base.as_object_mut()
             .unwrap()
             .insert("usage".into(), serde_json::json!({"include": true}));
@@ -2048,7 +2051,10 @@ mod tests {
         // Usage accounting is now requested unconditionally: OpenRouter omits
         // its `cost` field without it, and that figure is the only reliable
         // price for a router alias. Everything else must be untouched.
-        assert_eq!(merged.get("usage"), Some(&serde_json::json!({"include": true})));
+        assert_eq!(
+            merged.get("usage"),
+            Some(&serde_json::json!({"include": true}))
+        );
         base.as_object_mut()
             .unwrap()
             .insert("usage".into(), serde_json::json!({"include": true}));

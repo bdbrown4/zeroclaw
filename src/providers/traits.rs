@@ -111,6 +111,8 @@ mod tests {
                 input_tokens: Some(100),
                 output_tokens: Some(50),
                 cached_input_tokens: None,
+                resolved_model: None,
+                reported_cost_usd: None,
             }),
             reasoning_content: None,
         };

@@ -5516,6 +5516,7 @@ mod tests {
     #[test]
     fn whatsapp_memory_key_includes_sender_and_message_id() {
         let msg = ChannelMessage {
+            carries_foreign_content: false,
             id: "wamid-123".into(),
             sender: "+1234567890".into(),
             reply_target: "+1234567890".into(),

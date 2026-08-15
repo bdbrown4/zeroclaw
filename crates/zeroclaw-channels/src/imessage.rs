@@ -333,6 +333,7 @@ end tell"#
                         }
 
                         let msg = ChannelMessage {
+                            carries_foreign_content: false,
                             id: rowid.to_string(),
                             sender: sender.clone(),
                             reply_target: sender.clone(),

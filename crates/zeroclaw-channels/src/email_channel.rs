@@ -787,6 +787,7 @@ impl EmailChannel {
             return Ok(true);
         }
         let msg = ChannelMessage {
+            carries_foreign_content: false,
             id: email.msg_id,
             reply_target: email.sender.clone(),
             sender: email.sender,

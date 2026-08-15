@@ -250,6 +250,7 @@ impl WatiChannel {
 
         let timestamp = Self::extract_timestamp(payload);
         messages.push(ChannelMessage {
+            carries_foreign_content: false,
             id: Uuid::new_v4().to_string(),
             reply_target: normalized_phone.clone(),
             sender: normalized_phone,
@@ -432,6 +433,7 @@ impl WatiChannel {
 
         let timestamp = Self::extract_timestamp(payload);
         messages.push(ChannelMessage {
+            carries_foreign_content: false,
             id: Uuid::new_v4().to_string(),
             reply_target: normalized_phone.clone(),
             sender: normalized_phone,

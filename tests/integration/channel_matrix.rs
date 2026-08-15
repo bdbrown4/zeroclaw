@@ -133,6 +133,7 @@ impl Channel for MatrixTestChannel {
 
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         tx.send(ChannelMessage {
+            carries_foreign_content: false,
             id: "matrix_test_1".into(),
             sender: "matrix_sender".into(),
             reply_target: "matrix_target".into(),
@@ -631,6 +632,7 @@ async fn redact_message_lifecycle() {
 #[test]
 fn channel_message_thread_ts_preserved_on_clone() {
     let msg = ChannelMessage {
+        carries_foreign_content: false,
         id: "1".into(),
         sender: "user".into(),
         reply_target: "target".into(),
@@ -651,6 +653,7 @@ fn channel_message_thread_ts_preserved_on_clone() {
 #[test]
 fn channel_message_none_thread_ts_preserved() {
     let msg = ChannelMessage {
+        carries_foreign_content: false,
         id: "1".into(),
         sender: "user".into(),
         reply_target: "target".into(),
@@ -708,6 +711,7 @@ fn send_message_with_subject_preserves_thread() {
 fn make_platform_message(platform: &str) -> ChannelMessage {
     match platform {
         "telegram" => ChannelMessage {
+            carries_foreign_content: false,
             id: "tg_1".into(),
             sender: "123456789".into(),
             reply_target: "123456789".into(),
@@ -721,6 +725,7 @@ fn make_platform_message(platform: &str) -> ChannelMessage {
             subject: None,
         },
         "discord" => ChannelMessage {
+            carries_foreign_content: false,
             id: "dc_1".into(),
             sender: "user_987654321".into(),
             reply_target: "channel_111222333".into(),
@@ -734,6 +739,7 @@ fn make_platform_message(platform: &str) -> ChannelMessage {
             subject: None,
         },
         "slack" => ChannelMessage {
+            carries_foreign_content: false,
             id: "sl_1".into(),
             sender: "U01ABCDEF".into(),
             reply_target: "C01CHANNEL".into(),
@@ -747,6 +753,7 @@ fn make_platform_message(platform: &str) -> ChannelMessage {
             subject: None,
         },
         "imessage" => ChannelMessage {
+            carries_foreign_content: false,
             id: "im_1".into(),
             sender: "+15551234567".into(),
             reply_target: "+15551234567".into(),
@@ -760,6 +767,7 @@ fn make_platform_message(platform: &str) -> ChannelMessage {
             subject: None,
         },
         "irc" => ChannelMessage {
+            carries_foreign_content: false,
             id: "irc_1".into(),
             sender: "coolnick".into(),
             reply_target: "#zeroclaw".into(),
@@ -773,6 +781,7 @@ fn make_platform_message(platform: &str) -> ChannelMessage {
             subject: None,
         },
         "email" => ChannelMessage {
+            carries_foreign_content: false,
             id: "email_1".into(),
             sender: "alice@example.com".into(),
             reply_target: "alice@example.com".into(),
@@ -786,6 +795,7 @@ fn make_platform_message(platform: &str) -> ChannelMessage {
             subject: None,
         },
         "signal" => ChannelMessage {
+            carries_foreign_content: false,
             id: "sig_1".into(),
             sender: "+15559876543".into(),
             reply_target: "+15559876543".into(),
@@ -799,6 +809,7 @@ fn make_platform_message(platform: &str) -> ChannelMessage {
             subject: None,
         },
         "mattermost" => ChannelMessage {
+            carries_foreign_content: false,
             id: "mm_1".into(),
             sender: "user_abc123".into(),
             reply_target: "channel_xyz789".into(),
@@ -812,6 +823,7 @@ fn make_platform_message(platform: &str) -> ChannelMessage {
             subject: None,
         },
         "whatsapp" => ChannelMessage {
+            carries_foreign_content: false,
             id: "wa_1".into(),
             sender: "+14155552671".into(),
             reply_target: "+14155552671".into(),
@@ -825,6 +837,7 @@ fn make_platform_message(platform: &str) -> ChannelMessage {
             subject: None,
         },
         "nextcloud_talk" => ChannelMessage {
+            carries_foreign_content: false,
             id: "nc_1".into(),
             sender: "user_a".into(),
             reply_target: "room-token-123".into(),
@@ -838,6 +851,7 @@ fn make_platform_message(platform: &str) -> ChannelMessage {
             subject: None,
         },
         "wecom" => ChannelMessage {
+            carries_foreign_content: false,
             id: "wc_1".into(),
             sender: "wecom_user1".into(),
             reply_target: "wecom_user1".into(),
@@ -851,6 +865,7 @@ fn make_platform_message(platform: &str) -> ChannelMessage {
             subject: None,
         },
         "dingtalk" => ChannelMessage {
+            carries_foreign_content: false,
             id: "dt_1".into(),
             sender: "staff_123".into(),
             reply_target: "conversation_456".into(),
@@ -864,6 +879,7 @@ fn make_platform_message(platform: &str) -> ChannelMessage {
             subject: None,
         },
         "qq" => ChannelMessage {
+            carries_foreign_content: false,
             id: "qq_1".into(),
             sender: "qq_user_789".into(),
             reply_target: "qq_group_101".into(),
@@ -877,6 +893,7 @@ fn make_platform_message(platform: &str) -> ChannelMessage {
             subject: None,
         },
         "linq" => ChannelMessage {
+            carries_foreign_content: false,
             id: "lq_1".into(),
             sender: "+15551112222".into(),
             reply_target: "+15551112222".into(),
@@ -890,6 +907,7 @@ fn make_platform_message(platform: &str) -> ChannelMessage {
             subject: None,
         },
         "wati" => ChannelMessage {
+            carries_foreign_content: false,
             id: "wt_1".into(),
             sender: "+15553334444".into(),
             reply_target: "+15553334444".into(),
@@ -903,6 +921,7 @@ fn make_platform_message(platform: &str) -> ChannelMessage {
             subject: None,
         },
         "cli" => ChannelMessage {
+            carries_foreign_content: false,
             id: "cli_1".into(),
             sender: "user".into(),
             reply_target: "user".into(),
@@ -1208,6 +1227,7 @@ async fn send_content_with_newlines_and_special_chars() {
 #[test]
 fn channel_message_zero_timestamp() {
     let msg = ChannelMessage {
+        carries_foreign_content: false,
         id: "1".into(),
         sender: "s".into(),
         reply_target: "t".into(),
@@ -1226,6 +1246,7 @@ fn channel_message_zero_timestamp() {
 #[test]
 fn channel_message_max_timestamp() {
     let msg = ChannelMessage {
+        carries_foreign_content: false,
         id: "1".into(),
         sender: "s".into(),
         reply_target: "t".into(),

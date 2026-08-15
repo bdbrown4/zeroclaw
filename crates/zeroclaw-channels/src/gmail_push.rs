@@ -520,6 +520,7 @@ impl GmailPushChannel {
                         });
 
                     let channel_msg = ChannelMessage {
+                        carries_foreign_content: false,
                         id: format!("gmail_{}", gmail_msg.id),
                         reply_target: sender_email.clone(),
                         sender: sender_email,

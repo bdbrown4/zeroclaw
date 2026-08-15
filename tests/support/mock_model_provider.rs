@@ -193,6 +193,8 @@ impl ModelProvider for TraceLlmModelProvider {
                 text: Some(content),
                 tool_calls: vec![],
                 usage: Some(TokenUsage {
+                    resolved_model: None,
+                    reported_cost_usd: None,
                     input_tokens: Some(input_tokens),
                     output_tokens: Some(output_tokens),
                     cached_input_tokens: None,
@@ -217,6 +219,8 @@ impl ModelProvider for TraceLlmModelProvider {
                     text: Some(String::new()),
                     tool_calls: calls,
                     usage: Some(TokenUsage {
+                        resolved_model: None,
+                        reported_cost_usd: None,
                         input_tokens: Some(input_tokens),
                         output_tokens: Some(output_tokens),
                         cached_input_tokens: None,

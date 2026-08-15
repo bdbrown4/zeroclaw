@@ -416,6 +416,7 @@ mod tests {
             tx: tokio::sync::mpsc::Sender<ChannelMessage>,
         ) -> anyhow::Result<()> {
             let msg = ChannelMessage {
+                carries_foreign_content: false,
                 id: "resp_1".to_string(),
                 sender: "human".to_string(),
                 reply_target: "human".to_string(),

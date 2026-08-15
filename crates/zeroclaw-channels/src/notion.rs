@@ -471,6 +471,7 @@ impl Channel for NotionChannel {
 
                         if tx
                             .send(ChannelMessage {
+                                carries_foreign_content: false,
                                 id: page_id.clone(),
                                 sender: "notion".into(),
                                 reply_target: page_id,

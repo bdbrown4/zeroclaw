@@ -1283,324 +1283,325 @@ impl LarkChannel {
 
         loop {
             tokio::select! {
-                biased;
+                            biased;
 
-                _ = hb_interval.tick() => {
-                    seq = seq.wrapping_add(1);
-                    let ping = PbFrame {
-                        seq_id: seq, log_id: 0, service: service_id, method: 0,
-                        headers: vec![PbHeader { key: "type".into(), value: "ping".into() }],
-                        payload: None,
-                    };
-                    if write.send(WsMsg::Binary(ping.encode_to_vec().into())).await.is_err() {
-                        ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown), "ping failed, reconnecting");
-                        break;
-                    }
-                    // GC stale fragments > 5 min
-                    let cutoff = Instant::now().checked_sub(Duration::from_secs(300)).unwrap_or(Instant::now());
-                    frag_cache.retain(|_, (_, ts)| *ts > cutoff);
-                }
-
-                _ = timeout_check.tick() => {
-                    if last_recv.elapsed() > WS_HEARTBEAT_TIMEOUT {
-                        ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown), "heartbeat timeout, reconnecting");
-                        break;
-                    }
-                }
-
-                msg = read.next() => {
-                    let raw = match msg {
-                        Some(Ok(ws_msg)) => {
-                            if should_refresh_last_recv(&ws_msg) {
-                                last_recv = Instant::now();
+                            _ = hb_interval.tick() => {
+                                seq = seq.wrapping_add(1);
+                                let ping = PbFrame {
+                                    seq_id: seq, log_id: 0, service: service_id, method: 0,
+                                    headers: vec![PbHeader { key: "type".into(), value: "ping".into() }],
+                                    payload: None,
+                                };
+                                if write.send(WsMsg::Binary(ping.encode_to_vec().into())).await.is_err() {
+                                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown), "ping failed, reconnecting");
+                                    break;
+                                }
+                                // GC stale fragments > 5 min
+                                let cutoff = Instant::now().checked_sub(Duration::from_secs(300)).unwrap_or(Instant::now());
+                                frag_cache.retain(|_, (_, ts)| *ts > cutoff);
                             }
-                            match ws_msg {
-                                WsMsg::Binary(b) => b,
-                                WsMsg::Ping(d) => { let _ = write.send(WsMsg::Pong(d)).await; continue; }
-                                WsMsg::Close(_) => { ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), "WS closed — reconnecting"); break; }
-                                _ => continue,
+
+                            _ = timeout_check.tick() => {
+                                if last_recv.elapsed() > WS_HEARTBEAT_TIMEOUT {
+                                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown), "heartbeat timeout, reconnecting");
+                                    break;
+                                }
                             }
-                        }
-                        None => { ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), "WS closed — reconnecting"); break; }
-                        Some(Err(e)) => { ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": format!("{}", e)})), "WS read error"); break; }
-                    };
 
-                    let frame = match PbFrame::decode(&raw[..]) {
-                        Ok(f) => f,
-                        Err(e) => { ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": format!("{}", e)})), "proto decode"); continue; }
-                    };
-
-                    // CONTROL frame
-                    if frame.method == 0 {
-                        if frame.header_value("type") == "pong"
-                            && let Some(p) = &frame.payload
-                                && let Ok(cfg) = serde_json::from_slice::<WsClientConfig>(p)
-                                    && let Some(secs) = cfg.ping_interval {
-                                        let secs = secs.max(10);
-                                        if secs != ping_secs {
-                                            ping_secs = secs;
-                                            hb_interval = tokio::time::interval(Duration::from_secs(ping_secs));
-                                            ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"ping_secs": ping_secs})), "ping_interval → s");
+                            msg = read.next() => {
+                                let raw = match msg {
+                                    Some(Ok(ws_msg)) => {
+                                        if should_refresh_last_recv(&ws_msg) {
+                                            last_recv = Instant::now();
+                                        }
+                                        match ws_msg {
+                                            WsMsg::Binary(b) => b,
+                                            WsMsg::Ping(d) => { let _ = write.send(WsMsg::Pong(d)).await; continue; }
+                                            WsMsg::Close(_) => { ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), "WS closed — reconnecting"); break; }
+                                            _ => continue,
                                         }
                                     }
-                        continue;
-                    }
+                                    None => { ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), "WS closed — reconnecting"); break; }
+                                    Some(Err(e)) => { ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": format!("{}", e)})), "WS read error"); break; }
+                                };
 
-                    // DATA frame
-                    let msg_type = frame.header_value("type").to_string();
-                    let msg_id   = frame.header_value("message_id").to_string();
-                    let sum      = frame.header_value("sum").parse::<usize>().unwrap_or(1);
-                    let seq_num  = frame.header_value("seq").parse::<usize>().unwrap_or(0);
+                                let frame = match PbFrame::decode(&raw[..]) {
+                                    Ok(f) => f,
+                                    Err(e) => { ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": format!("{}", e)})), "proto decode"); continue; }
+                                };
 
-                    // ACK immediately (Feishu requires within 3 s)
-                    {
-                        let mut ack = frame.clone();
-                        ack.payload = Some(br#"{"code":200,"headers":{},"data":[]}"#.to_vec());
-                        ack.headers.push(PbHeader { key: "biz_rt".into(), value: "0".into() });
-                        let _ = write.send(WsMsg::Binary(ack.encode_to_vec().into())).await;
-                    }
+                                // CONTROL frame
+                                if frame.method == 0 {
+                                    if frame.header_value("type") == "pong"
+                                        && let Some(p) = &frame.payload
+                                            && let Ok(cfg) = serde_json::from_slice::<WsClientConfig>(p)
+                                                && let Some(secs) = cfg.ping_interval {
+                                                    let secs = secs.max(10);
+                                                    if secs != ping_secs {
+                                                        ping_secs = secs;
+                                                        hb_interval = tokio::time::interval(Duration::from_secs(ping_secs));
+                                                        ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(::serde_json::json!({"ping_secs": ping_secs})), "ping_interval → s");
+                                                    }
+                                                }
+                                    continue;
+                                }
 
-                    // Fragment reassembly
-                    let sum = if sum == 0 { 1 } else { sum };
-                    let payload: Vec<u8> = if sum == 1 || msg_id.is_empty() || seq_num >= sum {
-                        frame.payload.clone().unwrap_or_default()
-                    } else {
-                        let entry = frag_cache.entry(msg_id.clone())
-                            .or_insert_with(|| (vec![None; sum], Instant::now()));
-                        if entry.0.len() != sum { *entry = (vec![None; sum], Instant::now()); }
-                        entry.0[seq_num] = frame.payload.clone();
-                        if entry.0.iter().all(|s| s.is_some()) {
-                            let full: Vec<u8> = entry.0.iter()
-                                .flat_map(|s| s.as_deref().unwrap_or(&[]))
-                                .copied().collect();
-                            frag_cache.remove(&msg_id);
-                            full
-                        } else { continue; }
-                    };
+                                // DATA frame
+                                let msg_type = frame.header_value("type").to_string();
+                                let msg_id   = frame.header_value("message_id").to_string();
+                                let sum      = frame.header_value("sum").parse::<usize>().unwrap_or(1);
+                                let seq_num  = frame.header_value("seq").parse::<usize>().unwrap_or(0);
 
-                    if msg_type != "event" { continue; }
+                                // ACK immediately (Feishu requires within 3 s)
+                                {
+                                    let mut ack = frame.clone();
+                                    ack.payload = Some(br#"{"code":200,"headers":{},"data":[]}"#.to_vec());
+                                    ack.headers.push(PbHeader { key: "biz_rt".into(), value: "0".into() });
+                                    let _ = write.send(WsMsg::Binary(ack.encode_to_vec().into())).await;
+                                }
 
-                    let event: LarkEvent = match serde_json::from_slice(&payload) {
-                        Ok(e) => e,
-                        Err(e) => { ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": format!("{}", e)})), "event JSON"); continue; }
-                    };
-                    match event.header.event_type.as_str() {
-                        "im.message.receive_v1" => {}
-                        "card.action.trigger" => {
-                            if let Err(e) = self.handle_card_action_event(&event.event).await {
-                                ::zeroclaw_log::record!(
-                                    WARN,
-                                    ::zeroclaw_log::Event::new(
-                                        module_path!(),
-                                        ::zeroclaw_log::Action::Dispatch
+                                // Fragment reassembly
+                                let sum = if sum == 0 { 1 } else { sum };
+                                let payload: Vec<u8> = if sum == 1 || msg_id.is_empty() || seq_num >= sum {
+                                    frame.payload.clone().unwrap_or_default()
+                                } else {
+                                    let entry = frag_cache.entry(msg_id.clone())
+                                        .or_insert_with(|| (vec![None; sum], Instant::now()));
+                                    if entry.0.len() != sum { *entry = (vec![None; sum], Instant::now()); }
+                                    entry.0[seq_num] = frame.payload.clone();
+                                    if entry.0.iter().all(|s| s.is_some()) {
+                                        let full: Vec<u8> = entry.0.iter()
+                                            .flat_map(|s| s.as_deref().unwrap_or(&[]))
+                                            .copied().collect();
+                                        frag_cache.remove(&msg_id);
+                                        full
+                                    } else { continue; }
+                                };
+
+                                if msg_type != "event" { continue; }
+
+                                let event: LarkEvent = match serde_json::from_slice(&payload) {
+                                    Ok(e) => e,
+                                    Err(e) => { ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": format!("{}", e)})), "event JSON"); continue; }
+                                };
+                                match event.header.event_type.as_str() {
+                                    "im.message.receive_v1" => {}
+                                    "card.action.trigger" => {
+                                        if let Err(e) = self.handle_card_action_event(&event.event).await {
+                                            ::zeroclaw_log::record!(
+                                                WARN,
+                                                ::zeroclaw_log::Event::new(
+                                                    module_path!(),
+                                                    ::zeroclaw_log::Action::Dispatch
+                                                )
+                                                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                                                .with_attrs(::serde_json::json!({"error": e.to_string()})),
+                                                "Lark WS: card action dispatch error"
+                                            );
+                                        }
+                                        continue;
+                                    }
+                                    _ => continue,
+                                }
+
+                                let event_payload = event.event;
+
+                                let recv: MsgReceivePayload = match serde_json::from_value(event_payload.clone()) {
+                                    Ok(r) => r,
+                                    Err(e) => { ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": format!("{}", e)})), "payload parse"); continue; }
+                                };
+
+                                if recv.sender.sender_type == "app" || recv.sender.sender_type == "bot" { continue; }
+
+                                let sender_open_id = recv.sender.sender_id.open_id.as_deref().unwrap_or("");
+                                if !self.is_user_allowed(sender_open_id) {
+                                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"sender_open_id": sender_open_id})), "WS: ignoring (not in peer group)");
+                                    continue;
+                                }
+
+                                let lark_msg = &recv.message;
+
+                                // Dedup
+                                {
+                                    let now = Instant::now();
+                                    let mut seen = self.ws_seen_ids.write().await;
+                                    // GC
+                                    seen.retain(|_, t| now.duration_since(*t) < Duration::from_secs(30 * 60));
+                                    if seen.contains_key(&lark_msg.message_id) {
+                                        ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), &format!("WS: dup {}", lark_msg.message_id));
+                                        continue;
+                                    }
+                                    seen.insert(lark_msg.message_id.clone(), now);
+                                }
+
+                                // Decode content by type (mirrors clawdbot-feishu parsing)
+                                let (text, post_mentioned_open_ids) = match lark_msg.message_type.as_str() {
+                                    "text" => {
+                                        let v: serde_json::Value = match serde_json::from_str(&lark_msg.content) {
+                                            Ok(v) => v,
+                                            Err(_) => continue,
+                                        };
+                                        match v.get("text").and_then(|t| t.as_str()).filter(|s| !s.is_empty()) {
+                                            Some(t) => (t.to_string(), Vec::new()),
+                                            None => continue,
+                                        }
+                                    }
+                                    "post" => match parse_post_content_details(&lark_msg.content) {
+                                        Some(details) => (details.text, details.mentioned_open_ids),
+                                        None => continue,
+                                    },
+                                    "image" => {
+                                        let v: serde_json::Value = match serde_json::from_str(&lark_msg.content) {
+                                            Ok(v) => v,
+                                            Err(_) => continue,
+                                        };
+                                        let image_key = match v.get("image_key").and_then(|k| k.as_str()) {
+                                            Some(k) => k.to_string(),
+                                            None => { ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), "WS: image message missing image_key"); continue; }
+                                        };
+                                        match self.download_image_as_marker(&lark_msg.message_id, &image_key).await {
+                                            Some(marker) => (marker, Vec::new()),
+                                            None => {
+                                                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"image_key": image_key})), "WS: failed to download image");
+                                                (format!("[IMAGE:{image_key} | download failed]"), Vec::new())
+                                            }
+                                        }
+                                    }
+                                    "file" => {
+                                        let v: serde_json::Value = match serde_json::from_str(&lark_msg.content) {
+                                            Ok(v) => v,
+                                            Err(_) => continue,
+                                        };
+                                        let file_key = match v.get("file_key").and_then(|k| k.as_str()) {
+                                            Some(k) => k.to_string(),
+                                            None => { ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), "WS: file message missing file_key"); continue; }
+                                        };
+                                        let file_name = v.get("file_name")
+                                            .and_then(|n| n.as_str())
+                                            .unwrap_or("unknown_file")
+                                            .to_string();
+                                        match self.download_file_as_content(&lark_msg.message_id, &file_key, &file_name).await {
+                                            Some(content) => (content, Vec::new()),
+                                            None => {
+                                                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"file_key": file_key})), "WS: failed to download file");
+                                                (format!("[ATTACHMENT:{file_name} | download failed]"), Vec::new())
+                                            }
+                                        }
+                                    }
+                                    "audio" => {
+                                        let Some(manager) = self.transcription_manager.as_deref() else {
+                                            ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), &format!("WS: audio message in {} (transcription not configured)", lark_msg.chat_id));
+                                            continue;
+                                        };
+                                        let transcript = self.try_transcribe_audio_message(
+                                            &lark_msg.message_id,
+                                            &lark_msg.content,
+                                            manager,
+                                        ).await;
+                                        let Some(text) = transcript else { continue; };
+                                        (text, Vec::new())
+                                    }
+                                    "list" => match parse_list_content(&lark_msg.content) {
+                                        Some(t) => (t, Vec::new()),
+                                        None => { ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), "WS: list message with no extractable text"); continue; }
+                                    },
+                                    _ => { ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), &format!("WS: skipping unsupported type '{}'", lark_msg.message_type)); continue; }
+                                };
+
+                                let text = text.trim().to_string();
+                                if text.is_empty() { continue; }
+
+                                // Group-chat: only respond when explicitly @-mentioned
+                                let bot_open_id = self.resolved_bot_open_id();
+                                if lark_msg.chat_type == "group"
+                                    && !should_respond_in_group(
+                                        self.mention_only,
+                                        bot_open_id.as_deref(),
+                                        &lark_msg.mentions,
+                                        &post_mentioned_open_ids,
                                     )
-                                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                                    .with_attrs(::serde_json::json!({"error": e.to_string()})),
-                                    "Lark WS: card action dispatch error"
-                                );
-                            }
-                            continue;
-                        }
-                        _ => continue,
-                    }
-
-                    let event_payload = event.event;
-
-                    let recv: MsgReceivePayload = match serde_json::from_value(event_payload.clone()) {
-                        Ok(r) => r,
-                        Err(e) => { ::zeroclaw_log::record!(ERROR, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail).with_outcome(::zeroclaw_log::EventOutcome::Failure).with_attrs(::serde_json::json!({"error": format!("{}", e)})), "payload parse"); continue; }
-                    };
-
-                    if recv.sender.sender_type == "app" || recv.sender.sender_type == "bot" { continue; }
-
-                    let sender_open_id = recv.sender.sender_id.open_id.as_deref().unwrap_or("");
-                    if !self.is_user_allowed(sender_open_id) {
-                        ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"sender_open_id": sender_open_id})), "WS: ignoring (not in peer group)");
-                        continue;
-                    }
-
-                    let lark_msg = &recv.message;
-
-                    // Dedup
-                    {
-                        let now = Instant::now();
-                        let mut seen = self.ws_seen_ids.write().await;
-                        // GC
-                        seen.retain(|_, t| now.duration_since(*t) < Duration::from_secs(30 * 60));
-                        if seen.contains_key(&lark_msg.message_id) {
-                            ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), &format!("WS: dup {}", lark_msg.message_id));
-                            continue;
-                        }
-                        seen.insert(lark_msg.message_id.clone(), now);
-                    }
-
-                    // Decode content by type (mirrors clawdbot-feishu parsing)
-                    let (text, post_mentioned_open_ids) = match lark_msg.message_type.as_str() {
-                        "text" => {
-                            let v: serde_json::Value = match serde_json::from_str(&lark_msg.content) {
-                                Ok(v) => v,
-                                Err(_) => continue,
-                            };
-                            match v.get("text").and_then(|t| t.as_str()).filter(|s| !s.is_empty()) {
-                                Some(t) => (t.to_string(), Vec::new()),
-                                None => continue,
-                            }
-                        }
-                        "post" => match parse_post_content_details(&lark_msg.content) {
-                            Some(details) => (details.text, details.mentioned_open_ids),
-                            None => continue,
-                        },
-                        "image" => {
-                            let v: serde_json::Value = match serde_json::from_str(&lark_msg.content) {
-                                Ok(v) => v,
-                                Err(_) => continue,
-                            };
-                            let image_key = match v.get("image_key").and_then(|k| k.as_str()) {
-                                Some(k) => k.to_string(),
-                                None => { ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), "WS: image message missing image_key"); continue; }
-                            };
-                            match self.download_image_as_marker(&lark_msg.message_id, &image_key).await {
-                                Some(marker) => (marker, Vec::new()),
-                                None => {
-                                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"image_key": image_key})), "WS: failed to download image");
-                                    (format!("[IMAGE:{image_key} | download failed]"), Vec::new())
+                                {
+                                    continue;
                                 }
+
+                                // Inbound fast-ack: spawn the 👀 reaction immediately so the
+                                // user sees a "received" signal within ~100ms instead of
+                                // waiting for the orchestrator's classifier/memory/streaming
+                                // pipeline (which can take several seconds before the generic
+                                // Channel::add_reaction call would otherwise fire).
+                                //
+                                // Gated by `self.ack_reactions` — when the per-channel or
+                                // global `[channels].ack_reactions` is `false`, this fast-ack
+                                // is skipped. The later generic orchestrator call also checks
+                                // `ctx.ack_reactions` and will be a no-op when disabled.
+                                //
+                                // CRITICAL: this spawn MUST go through the trait
+                                // `Channel::add_reaction` so that Feishu's returned
+                                // reaction_id is written into the shared `reaction_ids`
+                                // cache. The trait impl also has a cache-hit dedupe
+                                // fast-path, so the later generic orchestrator call to
+                                // add_reaction("👀") becomes a no-op instead of a duplicate
+                                // POST. This is the "same cached reaction-id contract"
+                                // requested by the PR review: fast-ack and generic path
+                                // share a single cache, so `remove_reaction("👀")` always
+                                // finds the right reaction_id and no orphan 👀 is left
+                                // beside the completion marker. See lifecycle regression
+                                // tests `lark_inbound_ack_lifecycle_*` and
+                                // `lark_fast_ack_and_generic_path_dedupe_on_cache_hit`.
+                                if self.ack_reactions {
+                                    let reaction_channel = self.clone();
+                                    let reaction_message_id = lark_msg.message_id.clone();
+                                    let reaction_reply_target = lark_msg.chat_id.clone();
+                                    zeroclaw_spawn::spawn!(async move {
+                                        if let Err(e) = <LarkChannel as Channel>::add_reaction(
+                                            &reaction_channel,
+                                            &reaction_reply_target,
+                                            &reaction_message_id,
+                                            "\u{1F440}",
+                                        )
+                                        .await
+                                    {
+                                        ::zeroclaw_log::record!(
+                                            DEBUG,
+                                            ::zeroclaw_log::Event::new(
+                                                module_path!(),
+                                                ::zeroclaw_log::Action::Note,
+                                            )
+                                            .with_attrs(::serde_json::json!({
+                                                "message_id": reaction_message_id,
+                                                "error": format!("{e}"),
+                                                "error_key": "lark.inbound_fast_ack.failed",
+                                            })),
+                                            "Lark inbound fast-ack failed (soft)"
+                                        );
+                                    }
+                                });
+                                } // if self.ack_reactions
+
+                                let channel_msg = ChannelMessage {
+            carries_foreign_content: false,
+                                    id: lark_msg.message_id.clone(),
+                                    sender: self
+                                        .resolve_sender(&lark_msg.chat_id, Some(sender_open_id))
+                                        .to_string(),
+                                    reply_target: lark_msg.chat_id.clone(),
+                                    content: text,
+                                    channel: self.channel_name().to_string(),
+                        channel_alias: Some(self.alias.clone()),
+                                    timestamp: std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs(),
+                                    thread_ts: None,
+                                    interruption_scope_id: None,
+                                attachments: vec![],
+                                    subject: None,
+                                };
+
+                                ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), &format!("WS: message in {}", lark_msg.chat_id));
+                                if tx.send(channel_msg).await.is_err() { break; }
                             }
                         }
-                        "file" => {
-                            let v: serde_json::Value = match serde_json::from_str(&lark_msg.content) {
-                                Ok(v) => v,
-                                Err(_) => continue,
-                            };
-                            let file_key = match v.get("file_key").and_then(|k| k.as_str()) {
-                                Some(k) => k.to_string(),
-                                None => { ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), "WS: file message missing file_key"); continue; }
-                            };
-                            let file_name = v.get("file_name")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or("unknown_file")
-                                .to_string();
-                            match self.download_file_as_content(&lark_msg.message_id, &file_key, &file_name).await {
-                                Some(content) => (content, Vec::new()),
-                                None => {
-                                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"file_key": file_key})), "WS: failed to download file");
-                                    (format!("[ATTACHMENT:{file_name} | download failed]"), Vec::new())
-                                }
-                            }
-                        }
-                        "audio" => {
-                            let Some(manager) = self.transcription_manager.as_deref() else {
-                                ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), &format!("WS: audio message in {} (transcription not configured)", lark_msg.chat_id));
-                                continue;
-                            };
-                            let transcript = self.try_transcribe_audio_message(
-                                &lark_msg.message_id,
-                                &lark_msg.content,
-                                manager,
-                            ).await;
-                            let Some(text) = transcript else { continue; };
-                            (text, Vec::new())
-                        }
-                        "list" => match parse_list_content(&lark_msg.content) {
-                            Some(t) => (t, Vec::new()),
-                            None => { ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), "WS: list message with no extractable text"); continue; }
-                        },
-                        _ => { ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), &format!("WS: skipping unsupported type '{}'", lark_msg.message_type)); continue; }
-                    };
-
-                    let text = text.trim().to_string();
-                    if text.is_empty() { continue; }
-
-                    // Group-chat: only respond when explicitly @-mentioned
-                    let bot_open_id = self.resolved_bot_open_id();
-                    if lark_msg.chat_type == "group"
-                        && !should_respond_in_group(
-                            self.mention_only,
-                            bot_open_id.as_deref(),
-                            &lark_msg.mentions,
-                            &post_mentioned_open_ids,
-                        )
-                    {
-                        continue;
-                    }
-
-                    // Inbound fast-ack: spawn the 👀 reaction immediately so the
-                    // user sees a "received" signal within ~100ms instead of
-                    // waiting for the orchestrator's classifier/memory/streaming
-                    // pipeline (which can take several seconds before the generic
-                    // Channel::add_reaction call would otherwise fire).
-                    //
-                    // Gated by `self.ack_reactions` — when the per-channel or
-                    // global `[channels].ack_reactions` is `false`, this fast-ack
-                    // is skipped. The later generic orchestrator call also checks
-                    // `ctx.ack_reactions` and will be a no-op when disabled.
-                    //
-                    // CRITICAL: this spawn MUST go through the trait
-                    // `Channel::add_reaction` so that Feishu's returned
-                    // reaction_id is written into the shared `reaction_ids`
-                    // cache. The trait impl also has a cache-hit dedupe
-                    // fast-path, so the later generic orchestrator call to
-                    // add_reaction("👀") becomes a no-op instead of a duplicate
-                    // POST. This is the "same cached reaction-id contract"
-                    // requested by the PR review: fast-ack and generic path
-                    // share a single cache, so `remove_reaction("👀")` always
-                    // finds the right reaction_id and no orphan 👀 is left
-                    // beside the completion marker. See lifecycle regression
-                    // tests `lark_inbound_ack_lifecycle_*` and
-                    // `lark_fast_ack_and_generic_path_dedupe_on_cache_hit`.
-                    if self.ack_reactions {
-                        let reaction_channel = self.clone();
-                        let reaction_message_id = lark_msg.message_id.clone();
-                        let reaction_reply_target = lark_msg.chat_id.clone();
-                        zeroclaw_spawn::spawn!(async move {
-                            if let Err(e) = <LarkChannel as Channel>::add_reaction(
-                                &reaction_channel,
-                                &reaction_reply_target,
-                                &reaction_message_id,
-                                "\u{1F440}",
-                            )
-                            .await
-                        {
-                            ::zeroclaw_log::record!(
-                                DEBUG,
-                                ::zeroclaw_log::Event::new(
-                                    module_path!(),
-                                    ::zeroclaw_log::Action::Note,
-                                )
-                                .with_attrs(::serde_json::json!({
-                                    "message_id": reaction_message_id,
-                                    "error": format!("{e}"),
-                                    "error_key": "lark.inbound_fast_ack.failed",
-                                })),
-                                "Lark inbound fast-ack failed (soft)"
-                            );
-                        }
-                    });
-                    } // if self.ack_reactions
-
-                    let channel_msg = ChannelMessage {
-                        id: lark_msg.message_id.clone(),
-                        sender: self
-                            .resolve_sender(&lark_msg.chat_id, Some(sender_open_id))
-                            .to_string(),
-                        reply_target: lark_msg.chat_id.clone(),
-                        content: text,
-                        channel: self.channel_name().to_string(),
-            channel_alias: Some(self.alias.clone()),
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                        thread_ts: None,
-                        interruption_scope_id: None,
-                    attachments: vec![],
-                        subject: None,
-                    };
-
-                    ::zeroclaw_log::record!(DEBUG, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), &format!("WS: message in {}", lark_msg.chat_id));
-                    if tx.send(channel_msg).await.is_err() { break; }
-                }
-            }
         }
         Ok(())
     }
@@ -2259,6 +2260,7 @@ impl LarkChannel {
             });
 
         vec![ChannelMessage {
+            carries_foreign_content: false,
             id: message_id.to_string(),
             sender: self.resolve_sender(chat_id, Some(open_id)).to_string(),
             reply_target: chat_id.to_string(),
@@ -2677,6 +2679,7 @@ impl LarkChannel {
             .unwrap_or(open_id);
 
         messages.push(ChannelMessage {
+            carries_foreign_content: false,
             id: evt_message_id.to_string(),
             sender: self.resolve_sender(chat_id, Some(open_id)).to_string(),
             reply_target: chat_id.to_string(),

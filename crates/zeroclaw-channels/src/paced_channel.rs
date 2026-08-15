@@ -495,6 +495,21 @@ impl Channel for PacedChannel {
         self.inner.request_choice(question, choices, timeout).await
     }
 
+    /// Forwarded deliberately. A wrapper that silently answers `None` here
+    /// would delete the reply-approval gate for anyone who set a pacing floor —
+    /// a security control disappearing as a side effect of a throughput knob.
+    /// Not caught earlier only because `wrap` returns the inner `Arc` untouched
+    /// when the interval is 0, so the default config never builds this type.
+    fn reply_approval_recipient(
+        &self,
+        reply_target: &str,
+        sender: &str,
+        carries_foreign_content: bool,
+    ) -> Option<String> {
+        self.inner
+            .reply_approval_recipient(reply_target, sender, carries_foreign_content)
+    }
+
     fn supports_free_form_ask(&self) -> bool {
         self.inner.supports_free_form_ask()
     }

@@ -306,6 +306,7 @@ impl LinqChannel {
         };
 
         messages.push(ChannelMessage {
+            carries_foreign_content: false,
             id: Uuid::new_v4().to_string(),
             reply_target,
             sender: normalized_from,

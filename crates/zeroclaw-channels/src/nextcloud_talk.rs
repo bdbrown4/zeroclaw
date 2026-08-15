@@ -321,6 +321,7 @@ impl NextcloudTalkChannel {
             Self::value_to_string(obj.get("id")).unwrap_or_else(|| Uuid::new_v4().to_string());
 
         messages.push(ChannelMessage {
+            carries_foreign_content: false,
             id: message_id,
             reply_target: room_token.to_string(),
             sender: actor_id.to_string(),
@@ -465,6 +466,7 @@ impl NextcloudTalkChannel {
         let timestamp = Self::parse_timestamp_secs(message_obj.get("timestamp"));
 
         messages.push(ChannelMessage {
+            carries_foreign_content: false,
             id: message_id,
             reply_target: room_token.to_string(),
             sender: actor_id.to_string(),

@@ -58,6 +58,7 @@ fn msg_from(
     sender: &str,
 ) -> ChannelMessage {
     ChannelMessage {
+        carries_foreign_content: false,
         id: "msg-1".into(),
         sender: sender.into(),
         reply_target: reply_target.into(),

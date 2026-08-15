@@ -312,6 +312,7 @@ impl Channel for AmqpChannel {
             let seq = MSG_SEQ.fetch_add(1, Ordering::Relaxed);
 
             let channel_msg = ChannelMessage {
+                carries_foreign_content: false,
                 id: format!("amqp_{}_{seq}", chrono::Utc::now().timestamp_millis()),
                 sender: self.sender_label.clone(),
                 reply_target: self.sender_label.clone(),

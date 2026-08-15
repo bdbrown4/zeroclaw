@@ -316,6 +316,7 @@ impl VoiceCallChannel {
 
         // Notify the agent about the incoming call
         let msg = ChannelMessage {
+            carries_foreign_content: false,
             id: call_id.to_string(),
             sender: from_number.to_string(),
             reply_target: from_number.to_string(),

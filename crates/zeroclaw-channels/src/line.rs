@@ -520,6 +520,7 @@ async fn handle_webhook(
         };
 
         let channel_msg = ChannelMessage {
+            carries_foreign_content: false,
             id: final_msg_id,
             sender: user_id.to_string(),
             reply_target: recipient,

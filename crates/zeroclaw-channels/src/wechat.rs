@@ -2270,6 +2270,7 @@ impl Channel for WeChatChannel {
                     / 1000; // Convert to seconds
 
                 let channel_msg = ChannelMessage {
+                    carries_foreign_content: false,
                     id: message_id,
                     sender: from_user_id.to_string(),
                     reply_target: from_user_id.to_string(),

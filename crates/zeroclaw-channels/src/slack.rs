@@ -3414,6 +3414,7 @@ impl SlackChannel {
             .unwrap_or("0");
 
         Some(ChannelMessage {
+            carries_foreign_content: false,
             id: format!("slack_{channel_id}_{ts}_action"),
             sender: user.to_string(),
             reply_target: channel_id.to_string(),
@@ -3744,6 +3745,7 @@ impl SlackChannel {
                                     let scope_id = Some(item_ts.to_string());
                                     let sender = self.resolve_sender_identity(user).await;
                                     let cancel_msg = ChannelMessage {
+                                        carries_foreign_content: false,
                                         id: format!("slack_{item_channel}_{item_ts}_cancel"),
                                         sender,
                                         reply_target: item_channel.to_string(),
@@ -3864,6 +3866,7 @@ impl SlackChannel {
                 let sender = self.resolve_sender_identity(user).await;
 
                 let channel_msg = ChannelMessage {
+                    carries_foreign_content: false,
                     id: format!("slack_{channel_id}_{ts}"),
                     sender,
                     reply_target: channel_id.clone(),
@@ -5049,6 +5052,7 @@ impl Channel for SlackChannel {
                         }
 
                         let channel_msg = ChannelMessage {
+                            carries_foreign_content: false,
                             id: format!("slack_{channel_id}_{ts}"),
                             sender,
                             reply_target: channel_id.clone(),
@@ -5154,6 +5158,7 @@ impl Channel for SlackChannel {
                     }
 
                     let channel_msg = ChannelMessage {
+                        carries_foreign_content: false,
                         id: format!("slack_{thread_channel_id}_{reply_ts}"),
                         sender,
                         reply_target: thread_channel_id.clone(),
@@ -5571,11 +5576,13 @@ mod tests {
             Arc::new(Vec::new),
         );
         let dm = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             reply_target: "D0B189MTELX".into(),
             channel: "slack".into(),
             ..Default::default()
         };
         let group = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             reply_target: "C12345".into(),
             ..dm.clone()
         };
@@ -6697,6 +6704,7 @@ mod tests {
         use zeroclaw_api::channel::ChannelMessage;
 
         let make_msg = |ts: &str| ChannelMessage {
+            carries_foreign_content: false,
             id: format!("slack_C123_{ts}"),
             sender: "U_alice".into(),
             reply_target: "C123".into(),
@@ -6725,6 +6733,7 @@ mod tests {
         use zeroclaw_api::channel::ChannelMessage;
 
         let make_msg = |ts: &str| ChannelMessage {
+            carries_foreign_content: false,
             id: format!("slack_C123_{ts}"),
             sender: "U_alice".into(),
             reply_target: "C123".into(),

@@ -5489,8 +5489,11 @@ async fn process_channel_message_body(
             // point, so anything the turn DID has already happened. This holds a
             // sentence, not a turn.
             if let Some(channel) = target_channel.as_ref()
-                && let Some(approver) =
-                    channel.reply_approval_recipient(&msg.reply_target, &msg.sender)
+                && let Some(approver) = channel.reply_approval_recipient(
+                    &msg.reply_target,
+                    &msg.sender,
+                    msg.carries_foreign_content,
+                )
             {
                 let preview: String = delivered_response.chars().take(1500).collect();
                 let req = zeroclaw_api::channel::ChannelApprovalRequest {
@@ -10655,6 +10658,7 @@ temperature = 0.3
         alias: Option<&str>,
     ) -> zeroclaw_api::channel::ChannelMessage {
         zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "m1".into(),
             sender: "u1".into(),
             reply_target: "r1".into(),
@@ -13598,6 +13602,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-1".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-42".to_string(),
@@ -13715,6 +13720,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-1".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-42".to_string(),
@@ -13842,6 +13848,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-1".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-42".to_string(),
@@ -13992,6 +13999,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-1".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-42".to_string(),
@@ -14111,6 +14119,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx.clone(),
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-1".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-42".to_string(),
@@ -14246,6 +14255,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx.clone(),
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-telegram-tool-1".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-telegram".to_string(),
@@ -14369,6 +14379,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-raw-json".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-raw".to_string(),
@@ -14477,6 +14488,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-2".to_string(),
                 sender: "bob".to_string(),
                 reply_target: "chat-84".to_string(),
@@ -14605,6 +14617,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx.clone(),
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-cmd-1".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-1".to_string(),
@@ -14750,6 +14763,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-routed-1".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-1".to_string(),
@@ -14825,6 +14839,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-classifier-provider".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-precheck".to_string(),
@@ -14958,6 +14973,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-default-provider-cache".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-1".to_string(),
@@ -15064,6 +15080,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-iter-success".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-iter-success".to_string(),
@@ -15177,6 +15194,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-iter-fail".to_string(),
                 sender: "bob".to_string(),
                 reply_target: "chat-iter-fail".to_string(),
@@ -15545,6 +15563,7 @@ BTC is currently around $65,000 based on latest tool output."#
 
         let (tx, rx) = tokio::sync::mpsc::channel::<zeroclaw_api::channel::ChannelMessage>(4);
         tx.send(zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "1".to_string(),
             sender: "alice".to_string(),
             reply_target: "alice".to_string(),
@@ -15560,6 +15579,7 @@ BTC is currently around $65,000 based on latest tool output."#
         .await
         .unwrap();
         tx.send(zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "2".to_string(),
             sender: "bob".to_string(),
             reply_target: "bob".to_string(),
@@ -15688,6 +15708,7 @@ BTC is currently around $65,000 based on latest tool output."#
         let (tx, rx) = tokio::sync::mpsc::channel::<zeroclaw_api::channel::ChannelMessage>(8);
         let send_task = zeroclaw_spawn::spawn!(async move {
             tx.send(zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-1".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-1".to_string(),
@@ -15704,6 +15725,7 @@ BTC is currently around $65,000 based on latest tool output."#
             .unwrap();
             tokio::time::sleep(Duration::from_millis(40)).await;
             tx.send(zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-2".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-1".to_string(),
@@ -15840,6 +15862,7 @@ BTC is currently around $65,000 based on latest tool output."#
         let (tx, rx) = tokio::sync::mpsc::channel::<zeroclaw_api::channel::ChannelMessage>(8);
         let send_task = zeroclaw_spawn::spawn!(async move {
             tx.send(zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-1".to_string(),
                 sender: "U123".to_string(),
                 reply_target: "C123".to_string(),
@@ -15856,6 +15879,7 @@ BTC is currently around $65,000 based on latest tool output."#
             .unwrap();
             tokio::time::sleep(Duration::from_millis(40)).await;
             tx.send(zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-2".to_string(),
                 sender: "U123".to_string(),
                 reply_target: "C123".to_string(),
@@ -15995,6 +16019,7 @@ BTC is currently around $65,000 based on latest tool output."#
         let (tx, rx) = tokio::sync::mpsc::channel::<zeroclaw_api::channel::ChannelMessage>(8);
         let send_task = zeroclaw_spawn::spawn!(async move {
             tx.send(zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-1".to_string(),
                 sender: "15555550123".to_string(),
                 reply_target: "15555550123".to_string(),
@@ -16011,6 +16036,7 @@ BTC is currently around $65,000 based on latest tool output."#
             .unwrap();
             tokio::time::sleep(Duration::from_millis(40)).await;
             tx.send(zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-2".to_string(),
                 sender: "15555550123".to_string(),
                 reply_target: "15555550123".to_string(),
@@ -16140,6 +16166,7 @@ BTC is currently around $65,000 based on latest tool output."#
         let (tx, rx) = tokio::sync::mpsc::channel::<zeroclaw_api::channel::ChannelMessage>(8);
         let send_task = zeroclaw_spawn::spawn!(async move {
             tx.send(zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-a".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-1".to_string(),
@@ -16156,6 +16183,7 @@ BTC is currently around $65,000 based on latest tool output."#
             .unwrap();
             tokio::time::sleep(Duration::from_millis(30)).await;
             tx.send(zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-b".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-2".to_string(),
@@ -16267,6 +16295,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "typing-msg".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-typing".to_string(),
@@ -16375,6 +16404,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "react-msg".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-react".to_string(),
@@ -16984,6 +17014,7 @@ BTC is currently around $65,000 based on latest tool output."#
     #[test]
     fn conversation_memory_key_uses_message_id() {
         let msg = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "msg_abc123".into(),
             sender: "U123".into(),
             reply_target: "C456".into(),
@@ -17003,6 +17034,7 @@ BTC is currently around $65,000 based on latest tool output."#
     #[test]
     fn followup_thread_id_prefers_thread_ts() {
         let msg = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "slack_C123_1741234567.123456".into(),
             sender: "U123".into(),
             reply_target: "C123".into(),
@@ -17025,6 +17057,7 @@ BTC is currently around $65,000 based on latest tool output."#
     #[test]
     fn followup_thread_id_falls_back_to_message_id() {
         let msg = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "msg_abc123".into(),
             sender: "U123".into(),
             reply_target: "C456".into(),
@@ -17044,6 +17077,7 @@ BTC is currently around $65,000 based on latest tool output."#
     #[test]
     fn followup_thread_id_does_not_open_matrix_thread_for_root_message() {
         let msg = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "$event:server".into(),
             sender: "@alice:server".into(),
             reply_target: "!room:server".into(),
@@ -17063,6 +17097,7 @@ BTC is currently around $65,000 based on latest tool output."#
     #[test]
     fn matrix_root_conversation_history_key_omits_event_id() {
         let first = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "$first:server".into(),
             sender: "@alice:server".into(),
             reply_target: "!room:server".into(),
@@ -17076,6 +17111,7 @@ BTC is currently around $65,000 based on latest tool output."#
             subject: None,
         };
         let second = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "$second:server".into(),
             content: "send it again".into(),
             timestamp: 2,
@@ -17091,6 +17127,7 @@ BTC is currently around $65,000 based on latest tool output."#
     #[test]
     fn matrix_self_anchored_root_history_key_omits_event_id() {
         let first = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "$first:server".into(),
             sender: "@alice:server".into(),
             reply_target: "!room:server".into(),
@@ -17104,6 +17141,7 @@ BTC is currently around $65,000 based on latest tool output."#
             subject: None,
         };
         let second = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "$second:server".into(),
             content: "hello".into(),
             timestamp: 2,
@@ -17121,6 +17159,7 @@ BTC is currently around $65,000 based on latest tool output."#
     #[test]
     fn matrix_thread_follow_up_shares_root_session_key() {
         let root = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "$root:server".into(),
             sender: "@alice:server".into(),
             reply_target: "!room:server".into(),
@@ -17134,6 +17173,7 @@ BTC is currently around $65,000 based on latest tool output."#
             subject: None,
         };
         let follow_up = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "$reply:server".into(),
             content: "thread reply".into(),
             timestamp: 2,
@@ -17151,6 +17191,7 @@ BTC is currently around $65,000 based on latest tool output."#
     #[test]
     fn wecom_ws_conversation_history_key_uses_reply_target_scope() {
         let msg = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "msg_wecom_ws".into(),
             sender: "zeroclaw_user".into(),
             reply_target: "group--room-1".into(),
@@ -17189,6 +17230,7 @@ BTC is currently around $65,000 based on latest tool output."#
         thread: Option<&str>,
     ) -> zeroclaw_api::channel::ChannelMessage {
         zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             sender: sender.into(),
             reply_target: channel_id.into(),
             channel: "discord".into(),
@@ -17597,6 +17639,7 @@ BTC is currently around $65,000 based on latest tool output."#
     #[test]
     fn conversation_memory_key_is_unique_per_message() {
         let msg1 = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "msg_1".into(),
             sender: "U123".into(),
             reply_target: "C456".into(),
@@ -17610,6 +17653,7 @@ BTC is currently around $65,000 based on latest tool output."#
             subject: None,
         };
         let msg2 = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "msg_2".into(),
             sender: "U123".into(),
             reply_target: "C456".into(),
@@ -17635,6 +17679,7 @@ BTC is currently around $65,000 based on latest tool output."#
         let mem = SqliteMemory::new("test", tmp.path()).unwrap();
 
         let msg1 = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "msg_1".into(),
             sender: "U123".into(),
             reply_target: "C456".into(),
@@ -17648,6 +17693,7 @@ BTC is currently around $65,000 based on latest tool output."#
             subject: None,
         };
         let msg2 = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "msg_2".into(),
             sender: "U123".into(),
             reply_target: "C456".into(),
@@ -17702,6 +17748,7 @@ BTC is currently around $65,000 based on latest tool output."#
         let tmp = TempDir::new().unwrap();
         let mem = SqliteMemory::new("test", tmp.path()).unwrap();
         let msg = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "msg_1".into(),
             sender: "U123".into(),
             reply_target: "C456".into(),
@@ -17742,6 +17789,7 @@ BTC is currently around $65,000 based on latest tool output."#
         let tmp = TempDir::new().unwrap();
         let mem = SqliteMemory::new("test", tmp.path()).unwrap();
         let group_a_msg = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "msg_1".into(),
             sender: "U123".into(),
             reply_target: "group:alpha".into(),
@@ -17755,6 +17803,7 @@ BTC is currently around $65,000 based on latest tool output."#
             subject: None,
         };
         let group_b_msg = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "msg_2".into(),
             sender: "U123".into(),
             reply_target: "group:beta".into(),
@@ -17827,6 +17876,7 @@ BTC is currently around $65,000 based on latest tool output."#
         .unwrap();
 
         let msg = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "evt_1".into(),
             sender: raw_sender.into(),
             reply_target: "!room:server".into(),
@@ -17982,6 +18032,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx.clone(),
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-a".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-1".to_string(),
@@ -18001,6 +18052,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-b".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-1".to_string(),
@@ -18150,6 +18202,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx.clone(),
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-before-new".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-refresh".to_string(),
@@ -18186,6 +18239,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx.clone(),
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-new-session".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-refresh".to_string(),
@@ -18227,6 +18281,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-after-new".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-refresh".to_string(),
@@ -18347,6 +18402,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx.clone(),
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-ctx-1".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-ctx".to_string(),
@@ -18458,6 +18514,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-ctx-no-tool".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-ctx".to_string(),
@@ -18574,6 +18631,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx.clone(),
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-image-1".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-image".to_string(),
@@ -18717,6 +18775,7 @@ BTC is currently around $65,000 based on latest tool output."#
         process_channel_message(
             runtime_ctx.clone(),
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "tg-msg-1".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-telegram".to_string(),
@@ -20200,6 +20259,7 @@ This is an example JSON object for profile settings."#;
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-photo-1".to_string(),
                 sender: "zeroclaw_user".to_string(),
                 reply_target: "chat-photo".to_string(),
@@ -20314,6 +20374,7 @@ This is an example JSON object for profile settings."#;
         process_channel_message(
             Arc::clone(&runtime_ctx),
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-photo-1".to_string(),
                 sender: "zeroclaw_user".to_string(),
                 reply_target: "chat-photo".to_string(),
@@ -20333,6 +20394,7 @@ This is an example JSON object for profile settings."#;
         process_channel_message(
             Arc::clone(&runtime_ctx),
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-text-2".to_string(),
                 sender: "zeroclaw_user".to_string(),
                 reply_target: "chat-photo".to_string(),
@@ -20469,6 +20531,7 @@ This is an example JSON object for profile settings."#;
         process_channel_message(
             Arc::clone(&runtime_ctx),
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-bad-1".to_string(),
                 sender: "zeroclaw_user".to_string(),
                 reply_target: "chat-format".to_string(),
@@ -20488,6 +20551,7 @@ This is an example JSON object for profile settings."#;
         process_channel_message(
             Arc::clone(&runtime_ctx),
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-text-2".to_string(),
                 sender: "zeroclaw_user".to_string(),
                 reply_target: "chat-format".to_string(),
@@ -20706,6 +20770,7 @@ This is an example JSON object for profile settings."#;
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-qc-1".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-1".to_string(),
@@ -20855,6 +20920,7 @@ This is an example JSON object for profile settings."#;
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-qc-disabled".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-1".to_string(),
@@ -20996,6 +21062,7 @@ This is an example JSON object for profile settings."#;
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-qc-nomatch".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-1".to_string(),
@@ -21157,6 +21224,7 @@ This is an example JSON object for profile settings."#;
         process_channel_message(
             runtime_ctx,
             zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "msg-qc-prio".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "chat-1".to_string(),
@@ -21418,6 +21486,7 @@ This is an example JSON object for profile settings."#;
     #[test]
     fn interruption_scope_key_without_scope_id_is_three_component() {
         let msg = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "1".into(),
             sender: "alice".into(),
             reply_target: "room".into(),
@@ -21436,6 +21505,7 @@ This is an example JSON object for profile settings."#;
     #[test]
     fn interruption_scope_key_with_scope_id_is_four_component() {
         let msg = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "1".into(),
             sender: "alice".into(),
             reply_target: "room".into(),
@@ -21455,6 +21525,7 @@ This is an example JSON object for profile settings."#;
     fn interruption_scope_key_thread_ts_alone_does_not_affect_key() {
         // thread_ts used for reply anchoring should not bleed into scope key
         let msg = zeroclaw_api::channel::ChannelMessage {
+            carries_foreign_content: false,
             id: "1".into(),
             sender: "alice".into(),
             reply_target: "C123".into(),
@@ -21558,6 +21629,7 @@ This is an example JSON object for profile settings."#;
             // Two messages from same sender but in different Slack threads —
             // they must NOT cancel each other.
             tx.send(zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "1741234567.100001".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "C123".to_string(),
@@ -21574,6 +21646,7 @@ This is an example JSON object for profile settings."#;
             .unwrap();
             tokio::time::sleep(Duration::from_millis(30)).await;
             tx.send(zeroclaw_api::channel::ChannelMessage {
+                carries_foreign_content: false,
                 id: "1741234567.200002".to_string(),
                 sender: "alice".to_string(),
                 reply_target: "C123".to_string(),
@@ -22364,6 +22437,7 @@ Done."#;
 
     fn email_msg(id: &str, subject: Option<&str>) -> ChannelMessage {
         ChannelMessage {
+            carries_foreign_content: false,
             subject: subject.map(Into::into),
             ..ChannelMessage::new(
                 id,

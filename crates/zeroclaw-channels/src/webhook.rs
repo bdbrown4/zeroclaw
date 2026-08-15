@@ -445,6 +445,7 @@ impl Channel for WebhookChannel {
                 .unwrap_or_else(|| payload.sender.clone());
 
             let msg = ChannelMessage {
+                carries_foreign_content: false,
                 id: format!("webhook_{seq}"),
                 sender: payload.sender,
                 reply_target,

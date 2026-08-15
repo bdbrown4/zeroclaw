@@ -1842,6 +1842,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
         }
 
         Some(ChannelMessage {
+            carries_foreign_content: false,
             id: format!("telegram_{chat_id}_{message_id}"),
             sender: sender_identity,
             reply_target,
@@ -2011,6 +2012,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
         };
 
         Some(ChannelMessage {
+            carries_foreign_content: false,
             id: format!("telegram_{chat_id}_{message_id}"),
             sender: sender_identity,
             reply_target,
@@ -2281,6 +2283,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
         }
 
         Some(ChannelMessage {
+            carries_foreign_content: false,
             id: format!("telegram_{chat_id}_{message_id}"),
             sender: sender_identity,
             reply_target,

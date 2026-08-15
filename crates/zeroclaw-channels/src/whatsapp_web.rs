@@ -2090,6 +2090,7 @@ impl Channel for WhatsAppWebChannel {
 
                                 if let Err(e) = tx_inner
                                     .send(ChannelMessage {
+carries_foreign_content: false,
                                         id: uuid::Uuid::new_v4().to_string(),
                                         channel: "whatsapp".to_string(),
                                         channel_alias: Some((*alias).clone()),

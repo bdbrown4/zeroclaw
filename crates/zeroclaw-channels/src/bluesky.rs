@@ -251,6 +251,7 @@ impl BlueskyChannel {
         let reply_target = format!("{}|{}", notif.uri, cid);
 
         Some(ChannelMessage {
+            carries_foreign_content: false,
             id: format!("bluesky_{}", notif.cid),
             sender: notif.author.handle.clone(),
             reply_target,

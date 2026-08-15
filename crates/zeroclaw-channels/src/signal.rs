@@ -398,6 +398,7 @@ impl SignalChannel {
         );
 
         Some(ChannelMessage {
+            carries_foreign_content: false,
             id,
             sender: sender.clone(),
             reply_target: target,
