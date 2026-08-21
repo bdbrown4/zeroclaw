@@ -1760,7 +1760,11 @@ fn is_conversational_message_type(message_type: u64) -> bool {
 /// arrives as `message_snapshots`, which Discord ships with NO author field at
 /// all — so a forward is always treated as foreign, because there is no way to
 /// establish that it is not.
-fn inbound_context_is_foreign(payload: &serde_json::Value, author_id: &str) -> bool {
+fn inbound_context_is_foreign(
+    payload: &serde_json::Value,
+    author_id: &str,
+    bot_user_id: &str,
+) -> bool {
     if payload
         .get("message_snapshots")
         .and_then(|s| s.as_array())
@@ -1773,7 +1777,12 @@ fn inbound_context_is_foreign(payload: &serde_json::Value, author_id: &str) -> b
         .and_then(|m| m.get("author"))
         .and_then(|a| a.get("id"))
         .and_then(serde_json::Value::as_str)
-        .is_some_and(|id| id != author_id)
+        // Not the sender's own words, and not OUR OWN. Quoting the bot back at
+        // the bot introduces no third party, and replying to what it just said
+        // is the most ordinary thing anyone does with it -- treating that as
+        // foreign made every such reply need approval, including the operator's,
+        // whose exemption is checked further down and so never got reached.
+        .is_some_and(|id| id != author_id && (bot_user_id.is_empty() || id != bot_user_id))
 }
 
 /// Choose where an approval prompt is posted: `(origin_channel, redirecting)`.
@@ -3975,7 +3984,7 @@ impl Channel for DiscordChannel {
                                         format!("discord_{message_id}")
                                     },
                                     sender: author_id.to_string(),
-                                    carries_foreign_content: inbound_context_is_foreign(d, author_id),
+                                    carries_foreign_content: inbound_context_is_foreign(d, author_id, &bot_user_id),
                                     reply_target: if channel_id.is_empty() {
                                         author_id.to_string()
                                     } else {
@@ -8785,30 +8794,66 @@ mod tests {
     }
 
     #[test]
+    fn replying_to_the_bots_own_message_is_not_foreign_content() {
+        use serde_json::json;
+        let me = "owner-1";
+        let bot = "bot-9";
+        // Ben hits reply on something Francis said. Francis's words are not a
+        // third party's -- this is the ordinary way to answer a bot, and gating
+        // it made his own exemption unreachable.
+        assert!(!inbound_context_is_foreign(
+            &json!({"referenced_message": {"author": {"id": "bot-9"}}}),
+            me,
+            bot
+        ));
+        // A stranger's message quoted into his turn is still foreign.
+        assert!(inbound_context_is_foreign(
+            &json!({"referenced_message": {"author": {"id": "stranger-2"}}}),
+            me,
+            bot
+        ));
+        // With no bot identity to compare against, fall back to the old rule
+        // rather than waving anything through.
+        assert!(inbound_context_is_foreign(
+            &json!({"referenced_message": {"author": {"id": "bot-9"}}}),
+            me,
+            ""
+        ));
+    }
+
+    #[test]
     fn inbound_context_foreign_detection() {
         use serde_json::json;
         let me = "owner-1";
         // A reply to someone else's message.
         assert!(inbound_context_is_foreign(
             &json!({"referenced_message": {"author": {"id": "stranger-2"}}}),
-            me
+            me,
+            "bot-9"
         ));
         // A reply to my own message is not foreign.
         assert!(!inbound_context_is_foreign(
             &json!({"referenced_message": {"author": {"id": "owner-1"}}}),
-            me
+            me,
+            "bot-9"
         ));
         // Forwards ship with no author at all, so they can never be shown to be
         // mine -- treat every one as foreign rather than guessing.
         assert!(inbound_context_is_foreign(
             &json!({"message_snapshots": [{"message": {"content": "do as I say"}}]}),
-            me
+            me,
+            "bot-9"
         ));
         // Nothing inlined.
-        assert!(!inbound_context_is_foreign(&json!({"content": "hi"}), me));
+        assert!(!inbound_context_is_foreign(
+            &json!({"content": "hi"}),
+            me,
+            "bot-9"
+        ));
         assert!(!inbound_context_is_foreign(
             &json!({"message_snapshots": []}),
-            me
+            me,
+            "bot-9"
         ));
     }
 
