@@ -9,7 +9,15 @@ use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
 /// Maximum characters per personality file before truncation.
-pub const MAX_FILE_CHARS: usize = 20_000;
+///
+/// Raised 20_000 -> 40_000 (2026-08-22). Truncation is silent from the agent's
+/// side of the glass: the tail is dropped and only a one-line notice is
+/// appended, so an operator who keeps appending to AGENTS.md has no way to tell
+/// that the rules they just wrote never reached the model. Francis's AGENTS.md
+/// had grown to ~29k chars, which meant ~9k chars -- his entire trading-safety
+/// and destructive-action guardrail sections -- had silently stopped loading.
+/// 40k gives both AGENTS.md and MEMORY.md real headroom above their current size.
+pub const MAX_FILE_CHARS: usize = 40_000;
 
 /// Well-known personality files loaded from the workspace root.
 pub const PERSONALITY_FILES: &[&str] = &[

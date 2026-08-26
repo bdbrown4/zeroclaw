@@ -619,6 +619,9 @@ pub struct ModelProviderRuntimeOptions {
     /// When true, system messages are merged into the first user message before
     /// sending. Propagated from `ModelProviderConfig::merge_system_into_user`.
     pub merge_system_into_user: bool,
+    /// Per-alias override for whether this model accepts images, from
+    /// `ModelProviderConfig::vision`. `None` leaves the family default in place.
+    pub vision: Option<bool>,
     /// Extra JSON parameters merged into API request bodies at the top level.
     /// Propagated from `ModelProviderConfig::provider_extra`.
     pub provider_extra: Option<serde_json::Value>,
@@ -645,6 +648,7 @@ pub struct ModelProviderRuntimeOptions {
 impl Default for ModelProviderRuntimeOptions {
     fn default() -> Self {
         Self {
+            vision: None,
             auth_profile_override: None,
             provider_kind: None,
             provider_api_url: None,
@@ -709,6 +713,10 @@ pub fn model_provider_runtime_options_from_model_provider_entry(
     let tls_ca_cert_path = entry.and_then(|e| e.tls_ca_cert_path.clone());
 
     ModelProviderRuntimeOptions {
+        // Straight off the alias entry: unlike merge_system_into_user above,
+        // this is a property of the model this alias points at, not of whatever
+        // profile happens to share its URL.
+        vision: entry.and_then(|e| e.vision),
         auth_profile_override: None,
         provider_kind: entry.and_then(|e| {
             e.kind

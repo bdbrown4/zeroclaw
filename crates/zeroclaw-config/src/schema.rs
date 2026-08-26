@@ -821,6 +821,21 @@ pub struct ModelProviderConfig {
     #[tab(Advanced)]
     #[serde(default, skip_serializing_if = "is_false")]
     pub merge_system_into_user: bool,
+    /// Whether the model behind THIS alias can actually accept images.
+    ///
+    /// Vision is otherwise a per-provider-family constant, which is wrong the
+    /// moment one family serves more than one model: "Ollama" covers both llava
+    /// and a text-only Qwen, and the family flag cannot tell them apart. When a
+    /// provider claims vision it does not have, image markers are inflated into
+    /// base64 data URIs for it and then forwarded as prompt TEXT, so the model
+    /// is handed a megabyte of base64 and answers the question it appears to
+    /// ask: how do I decode this PNG.
+    ///
+    /// `None` (default) keeps whatever the family decides, so nothing changes
+    /// until this is set. Set `false` on a text-only local model.
+    #[tab(Advanced)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
     /// Extra JSON parameters to include in API requests.
     /// Merged at the top level of the request body, allowing provider-specific
     /// features (routing, transforms, etc.) without code changes.
